@@ -71,16 +71,20 @@ function cleanDiagnosticMessage(message: string): string {
     .trim();
 }
 
-function rangeFromLocation(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  location: any,
-): Range {
-  if (location?.syntax?.start && location?.syntax?.end) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rangeFromLocation(location: any): Range {
+  const start = location?.syntax?.start ?? location?.start;
+  const end = location?.syntax?.end ?? location?.end;
+
+  if (start && end) {
+    const startColumn = start.column;
+    const endColumn = end.column;
+
     return {
-      startLine: location.syntax.start.line + 1,
-      startColumn: location.syntax.start.column + 1,
-      endLine: location.syntax.end.line + 1,
-      endColumn: location.syntax.end.column + 1,
+      startLine: start.line,
+      startColumn,
+      endLine: end.line,
+      endColumn: Math.max(endColumn + 1, startColumn + 1),
     };
   }
 
@@ -92,367 +96,292 @@ function rangeFromLocation(
   };
 }
 
-function resultMessageToText(message: { toString(): string } | string): string {
+function messageToText(message: { toString(): string } | string): string {
   return cleanDiagnosticMessage(
     typeof message === 'string' ? message : message.toString(),
   );
 }
 
-// ============================================
-// Built-in Pie keywords and types
-// ============================================
+function tokenAt(sourceCode: string, line: number, column: number): string {
+  const text = sourceCode.split('\n')[line - 1] ?? '';
+  const index = Math.max(0, column - 1);
+  const left = text.slice(0, index);
+  const right = text.slice(index);
+  const prefix = /[^\s()"]+$/.exec(left)?.[0] ?? '';
+  const suffix = /^[^\s()"]+/.exec(right)?.[0] ?? '';
+  return `${prefix}${suffix}`;
+}
 
-const PIE_KEYWORDS: CompletionItem[] = [
-  // Declarations
+function completionPrefix(sourceCode: string, line: number, column: number): string {
+  const text = sourceCode.split('\n')[line - 1] ?? '';
+  return /[^\s()"]+$/.exec(text.slice(0, Math.max(0, column - 1)))?.[0] ?? '';
+}
+
+const PIE_COMPLETIONS: CompletionItem[] = [
   { label: 'claim', kind: 'keyword', detail: 'Declare a claim', insertText: '(claim ${1:name} ${2:type})' },
-  { label: 'define', kind: 'keyword', detail: 'Define a function or value', insertText: '(define ${1:name} ${2:expr})' },
-  { label: 'define-tactically', kind: 'keyword', detail: 'Prove a claim using tactics', insertText: '(define-tactically ${1:name}\n  ${2:tactics})' },
-
-  // Types
+  { label: 'define', kind: 'keyword', detail: 'Define a value', insertText: '(define ${1:name} ${2:expr})' },
+  { label: 'define-tactically', kind: 'keyword', detail: 'Prove a claim with tactics', insertText: '(define-tactically ${1:name}\n  (${2:tactics}))' },
   { label: 'Nat', kind: 'type', detail: 'Natural numbers' },
-  { label: 'Atom', kind: 'type', detail: 'Atomic values (quoted symbols)' },
-  { label: 'Trivial', kind: 'type', detail: 'The trivial type with one element' },
-  { label: 'Absurd', kind: 'type', detail: 'The empty type (no inhabitants)' },
-  { label: 'U', kind: 'type', detail: 'The universe of types' },
-  { label: 'Pair', kind: 'type', detail: 'Dependent pair type', insertText: '(Pair ${1:A} ${2:B})' },
-  { label: 'Either', kind: 'type', detail: 'Sum type', insertText: '(Either ${1:L} ${2:R})' },
-  { label: 'List', kind: 'type', detail: 'List type', insertText: '(List ${1:E})' },
-  { label: 'Vec', kind: 'type', detail: 'Vector type (list with length)', insertText: '(Vec ${1:E} ${2:len})' },
-  { label: '=', kind: 'type', detail: 'Equality type', insertText: '(= ${1:A} ${2:from} ${3:to})' },
-  { label: '->', kind: 'type', detail: 'Function type', insertText: '(-> ${1:A} ${2:B})' },
+  { label: 'Atom', kind: 'type', detail: 'Atoms' },
+  { label: 'Trivial', kind: 'type', detail: 'The trivial type' },
+  { label: 'Absurd', kind: 'type', detail: 'The empty type' },
+  { label: 'U', kind: 'type', detail: 'Universe of types' },
   { label: 'Pi', kind: 'type', detail: 'Dependent function type', insertText: '(Pi ((${1:x} ${2:A}))\n  ${3:B})' },
   { label: 'Sigma', kind: 'type', detail: 'Dependent pair type', insertText: '(Sigma ((${1:x} ${2:A}))\n  ${3:B})' },
-
-  // Constructors
-  { label: 'zero', kind: 'variable', detail: 'The natural number zero' },
-  { label: 'add1', kind: 'function', detail: 'Successor of a natural number', insertText: '(add1 ${1:n})' },
-  { label: 'same', kind: 'function', detail: 'Proof of reflexivity', insertText: '(same ${1:expr})' },
-  { label: 'sole', kind: 'variable', detail: 'The sole element of Trivial' },
+  { label: 'Pair', kind: 'type', detail: 'Pair type', insertText: '(Pair ${1:A} ${2:B})' },
+  { label: 'Either', kind: 'type', detail: 'Either type', insertText: '(Either ${1:L} ${2:R})' },
+  { label: 'List', kind: 'type', detail: 'List type', insertText: '(List ${1:E})' },
+  { label: 'Vec', kind: 'type', detail: 'Vector type', insertText: '(Vec ${1:E} ${2:n})' },
+  { label: '=', kind: 'type', detail: 'Equality type', insertText: '(= ${1:A} ${2:from} ${3:to})' },
+  { label: '->', kind: 'type', detail: 'Function type', insertText: '(-> ${1:A} ${2:B})' },
+  { label: 'lambda', kind: 'keyword', detail: 'Lambda expression', insertText: '(lambda (${1:x}) ${2:body})' },
+  { label: 'the', kind: 'keyword', detail: 'Type annotation', insertText: '(the ${1:type} ${2:expr})' },
+  { label: 'zero', kind: 'variable', detail: 'Zero' },
+  { label: 'add1', kind: 'function', detail: 'Successor', insertText: '(add1 ${1:n})' },
+  { label: 'same', kind: 'function', detail: 'Reflexivity proof', insertText: '(same ${1:expr})' },
+  { label: 'sole', kind: 'variable', detail: 'Trivial inhabitant' },
   { label: 'nil', kind: 'variable', detail: 'Empty list' },
   { label: '::', kind: 'function', detail: 'List cons', insertText: '(:: ${1:head} ${2:tail})' },
-  { label: 'vecnil', kind: 'variable', detail: 'Empty vector' },
-  { label: 'vec::', kind: 'function', detail: 'Vector cons', insertText: '(vec:: ${1:head} ${2:tail})' },
-  { label: 'left', kind: 'function', detail: 'Left injection into Either', insertText: '(left ${1:expr})' },
-  { label: 'right', kind: 'function', detail: 'Right injection into Either', insertText: '(right ${1:expr})' },
-  { label: 'cons', kind: 'function', detail: 'Construct a dependent pair', insertText: '(cons ${1:fst} ${2:snd})' },
-
-  // Eliminators
-  { label: 'rec-Nat', kind: 'function', detail: 'Recursion on Nat', insertText: '(rec-Nat ${1:target}\n  ${2:base}\n  (lambda (${3:n-1} ${4:acc}) ${5:step}))' },
-  { label: 'ind-Nat', kind: 'function', detail: 'Induction on Nat', insertText: '(ind-Nat ${1:target}\n  (lambda (${2:k}) ${3:motive})\n  ${4:base}\n  (lambda (${5:n-1} ${6:ih}) ${7:step}))' },
-  { label: 'ind-List', kind: 'function', detail: 'Induction on List', insertText: '(ind-List ${1:target}\n  (lambda (${2:e}) ${3:motive})\n  ${4:base}\n  (lambda (${5:h} ${6:t} ${7:ih}) ${8:step}))' },
-  { label: 'ind-Vec', kind: 'function', detail: 'Induction on Vec', insertText: '(ind-Vec ${1:len} ${2:target}\n  (lambda (${3:k} ${4:es}) ${5:motive})\n  ${6:base}\n  (lambda (${7:h} ${8:t} ${9:ih}) ${10:step}))' },
-  { label: 'ind-Either', kind: 'function', detail: 'Induction on Either', insertText: '(ind-Either ${1:target}\n  (lambda (${2:e}) ${3:motive})\n  (lambda (${4:l}) ${5:left-case})\n  (lambda (${6:r}) ${7:right-case}))' },
-  { label: 'ind-Absurd', kind: 'function', detail: 'Absurdity elimination', insertText: '(ind-Absurd ${1:target}\n  ${2:motive})' },
-  { label: 'replace', kind: 'function', detail: 'Replace along an equality', insertText: '(replace ${1:proof}\n  (lambda (${2:k}) ${3:motive})\n  ${4:base})' },
-  { label: 'symm', kind: 'function', detail: 'Symmetry of equality', insertText: '(symm ${1:proof})' },
-  { label: 'cong', kind: 'function', detail: 'Congruence', insertText: '(cong ${1:proof} ${2:fun})' },
-  { label: 'trans', kind: 'function', detail: 'Transitivity of equality', insertText: '(trans ${1:p1} ${2:p2})' },
-  { label: 'car', kind: 'function', detail: 'First projection of a pair', insertText: '(car ${1:pair})' },
-  { label: 'cdr', kind: 'function', detail: 'Second projection of a pair', insertText: '(cdr ${1:pair})' },
-
-  // Lambda / application
-  { label: 'lambda', kind: 'keyword', detail: 'Anonymous function', insertText: '(lambda (${1:x}) ${2:body})' },
-  { label: 'the', kind: 'keyword', detail: 'Type annotation', insertText: '(the ${1:type} ${2:expr})' },
-];
-
-// Tactic names for use inside define-tactically blocks
-const TACTIC_NAMES: CompletionItem[] = [
+  { label: 'cons', kind: 'function', detail: 'Pair constructor', insertText: '(cons ${1:car} ${2:cdr})' },
+  { label: 'car', kind: 'function', detail: 'Pair first projection', insertText: '(car ${1:pair})' },
+  { label: 'cdr', kind: 'function', detail: 'Pair second projection', insertText: '(cdr ${1:pair})' },
+  { label: 'left', kind: 'function', detail: 'Either left injection', insertText: '(left ${1:value})' },
+  { label: 'right', kind: 'function', detail: 'Either right injection', insertText: '(right ${1:value})' },
   { label: 'intro', kind: 'function', detail: 'Introduce a variable', insertText: '(intro ${1:name})' },
-  { label: 'exact', kind: 'function', detail: 'Provide an exact proof term', insertText: '(exact ${1:expr})' },
-  { label: 'split', kind: 'function', detail: 'Split a conjunction goal' },
-  { label: 'left', kind: 'function', detail: 'Prove the left side of a disjunction' },
-  { label: 'right', kind: 'function', detail: 'Prove the right side of a disjunction' },
-  { label: 'exists', kind: 'function', detail: 'Provide a witness for an existential', insertText: '(exists ${1:witness})' },
-  { label: 'elim-Nat', kind: 'function', detail: 'Eliminate a Nat by induction', insertText: '(elim-Nat ${1:var})' },
-  { label: 'elim-List', kind: 'function', detail: 'Eliminate a List by induction', insertText: '(elim-List ${1:var})' },
-  { label: 'elim-Vec', kind: 'function', detail: 'Eliminate a Vec by induction', insertText: '(elim-Vec ${1:var})' },
-  { label: 'elim-Either', kind: 'function', detail: 'Eliminate an Either', insertText: '(elim-Either ${1:var})' },
-  { label: 'elim-Equal', kind: 'function', detail: 'Eliminate an equality', insertText: '(elim-Equal ${1:var})' },
-  { label: 'elim-Absurd', kind: 'function', detail: 'Eliminate an absurdity', insertText: '(elim-Absurd ${1:var})' },
-  { label: 'apply', kind: 'function', detail: 'Apply a lemma or function', insertText: '(apply ${1:expr})' },
-  { label: 'then', kind: 'keyword', detail: 'Sequential tactic composition', insertText: '(then\n  ${1:tactic1}\n  ${2:tactic2})' },
+  { label: 'exact', kind: 'function', detail: 'Provide exact proof term', insertText: '(exact ${1:expr})' },
+  { label: 'exists', kind: 'function', detail: 'Provide Sigma witness', insertText: '(exists ${1:witness})' },
+  { label: 'split-Pair', kind: 'function', detail: 'Split a Sigma/Pair goal' },
+  { label: 'elim-Nat', kind: 'function', detail: 'Eliminate Nat', insertText: '(elim-Nat ${1:n})' },
+  { label: 'elim-List', kind: 'function', detail: 'Eliminate List', insertText: '(elim-List ${1:xs})' },
+  { label: 'elim-Vec', kind: 'function', detail: 'Eliminate Vec', insertText: '(elim-Vec ${1:xs})' },
+  { label: 'elim-Either', kind: 'function', detail: 'Eliminate Either', insertText: '(elim-Either ${1:e})' },
+  { label: 'elim-Equal', kind: 'function', detail: 'Eliminate equality', insertText: '(elim-Equal ${1:eq})' },
+  { label: 'elim-Absurd', kind: 'function', detail: 'Eliminate Absurd', insertText: '(elim-Absurd ${1:x})' },
+  { label: 'apply', kind: 'function', detail: 'Apply a theorem or function', insertText: '(apply ${1:expr})' },
+  { label: 'then', kind: 'keyword', detail: 'Branch tactic block', insertText: '(then\n  ${1:tactic})' },
 ];
 
-/**
- * Extract user-defined symbol names from source code.
- * Looks for top-level (claim name ...) and (define name ...) forms.
- */
 function extractUserSymbols(sourceCode: string): CompletionItem[] {
   const items: CompletionItem[] = [];
-  const claimPattern = /\(\s*claim\s+(\S+)/g;
-  const definePattern = /\(\s*define\s+(\S+)/g;
-
-  let match: RegExpExecArray | null;
-
-  match = claimPattern.exec(sourceCode);
-  while (match !== null) {
-    const name = match[1];
-    if (name && !items.find((item) => item.label === name)) {
-      items.push({ label: name, kind: 'function', detail: 'User claim' });
+  const add = (label: string, kind: CompletionItem['kind'], detail: string) => {
+    if (label && !items.some((item) => item.label === label)) {
+      items.push({ label, kind, detail });
     }
-    match = claimPattern.exec(sourceCode);
+  };
+
+  for (const match of sourceCode.matchAll(/\(\s*claim\s+([^\s()]+)/g)) {
+    add(match[1], 'type', 'User claim');
   }
-
-  match = definePattern.exec(sourceCode);
-  while (match !== null) {
-    const name = match[1];
-    if (name && !items.find((item) => item.label === name)) {
-      items.push({ label: name, kind: 'function', detail: 'User definition' });
-    }
-    match = definePattern.exec(sourceCode);
+  for (const match of sourceCode.matchAll(/\(\s*define\s+([^\s()]+)/g)) {
+    add(match[1], 'function', 'User definition');
   }
 
   return items;
 }
 
-/**
- * Filter completions by the prefix at the cursor.
- * Returns items that start with the given prefix (case-insensitive).
- */
-function filterByPrefix(items: CompletionItem[], prefix: string): CompletionItem[] {
-  if (!prefix) return items;
-  const lower = prefix.toLowerCase();
-  return items.filter((item) => item.label.toLowerCase().startsWith(lower));
+let pieModulesPromise: ReturnType<typeof loadPieModules> | null = null;
+
+function loadPieModules() {
+  if (!pieModulesPromise) {
+    pieModulesPromise = Promise.all([
+      import('@pie/parser/parser'),
+      import('@pie/utils/context'),
+      import('@pie/types/utils'),
+      import('@pie/typechecker/represent'),
+      import('@pie/typechecker/type-definition'),
+    ]).then(([
+      parserModule,
+      contextModule,
+      utilsModule,
+      representModule,
+      typeDefinitionModule,
+    ]) => ({
+      parserModule,
+      contextModule,
+      utilsModule,
+      representModule,
+      typeDefinitionModule,
+    }));
+  }
+
+  return pieModulesPromise;
 }
 
-/**
- * Get the current token at (line, column) in sourceCode.
- */
-function getTokenAtCursor(sourceCode: string, line: number, column: number): string {
-  const lines = sourceCode.split('\n');
-  const lineText = lines[line - 1] ?? '';
-  const upToCursor = lineText.slice(0, column - 1);
-  const tokenMatch = /[^\s()"]+$/.exec(upToCursor);
-  return tokenMatch ? tokenMatch[0] : '';
+let cachedSourceCode: string | null = null;
+let cachedBuildContext: ReturnType<typeof buildContextUncached> | null = null;
+
+function buildContext(sourceCode: string) {
+  if (cachedSourceCode === sourceCode && cachedBuildContext) {
+    return cachedBuildContext;
+  }
+
+  cachedSourceCode = sourceCode;
+  cachedBuildContext = buildContextUncached(sourceCode);
+  return cachedBuildContext;
+}
+
+async function buildContextUncached(sourceCode: string) {
+  const {
+    parserModule,
+    contextModule,
+    utilsModule,
+    representModule,
+    typeDefinitionModule,
+  } = await loadPieModules();
+
+  const {
+    schemeParse,
+    pieDeclarationParser,
+    Claim,
+    Definition,
+    SamenessCheck,
+    DefineTactically,
+  } = parserModule;
+  const {
+    initCtx,
+    addClaimToContext,
+    addDefineToContext,
+    addDefineTacticallyToContext,
+  } = contextModule;
+  const { go, stop } = utilsModule;
+  const { checkSame, represent } = representModule;
+  const { TypeDefinition } = typeDefinitionModule;
+
+  let ctx = new Map(initCtx);
+  let renaming = new Map<string, string>();
+  const diagnostics: Diagnostic[] = [];
+  let parseSuccessful = true;
+  let typeCheckSuccessful = true;
+
+  let astList: unknown[];
+  try {
+    astList = schemeParse(sourceCode) as unknown[];
+  } catch (error) {
+    return {
+      ctx,
+      diagnostics: [{
+        severity: 'error' as const,
+        message: cleanDiagnosticMessage(error instanceof Error ? error.message : 'Failed to parse source'),
+        range: rangeFromLocation(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (error as any)?.location,
+        ),
+        source: 'parser' as const,
+      }],
+      parseSuccessful: false,
+      typeCheckSuccessful: false,
+    };
+  }
+
+  for (const ast of astList) {
+    let declaration: unknown;
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      declaration = pieDeclarationParser.parseDeclaration(ast as any);
+    } catch (error) {
+      parseSuccessful = false;
+      typeCheckSuccessful = false;
+      diagnostics.push({
+        severity: 'error',
+        message: cleanDiagnosticMessage(error instanceof Error ? error.message : 'Failed to parse declaration'),
+        range: rangeFromLocation(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (ast as any)?.location,
+        ),
+        source: 'parser',
+      });
+      continue;
+    }
+
+    try {
+      let result: unknown = null;
+
+      if (declaration instanceof Claim) {
+        result = addClaimToContext(ctx, declaration.name, declaration.location, declaration.type);
+        if (result instanceof go) ctx = result.result;
+      } else if (declaration instanceof Definition) {
+        result = addDefineToContext(ctx, declaration.name, declaration.location, declaration.expr);
+        if (result instanceof go) ctx = result.result;
+      } else if (declaration instanceof DefineTactically) {
+        result = addDefineTacticallyToContext(ctx, declaration.name, declaration.location, declaration.tactics);
+        if (result instanceof go) ctx = result.result.context;
+      } else if (declaration instanceof SamenessCheck) {
+        result = checkSame(ctx, declaration.location, declaration.type, declaration.left, declaration.right);
+      } else if (declaration instanceof TypeDefinition) {
+        const normalized = declaration.normalizeConstructor(ctx, renaming);
+        ctx = normalized[0];
+        renaming = normalized[1];
+      } else {
+        result = represent(ctx, declaration as Parameters<typeof represent>[1]);
+      }
+
+      if (result instanceof stop) {
+        typeCheckSuccessful = false;
+        diagnostics.push({
+          severity: 'error',
+          message: messageToText(result.message),
+          range: rangeFromLocation(result.where),
+          source: 'typechecker',
+        });
+      }
+    } catch (error) {
+      typeCheckSuccessful = false;
+      diagnostics.push({
+        severity: 'error',
+        message: cleanDiagnosticMessage(error instanceof Error ? error.message : 'Failed to check declaration'),
+        range: rangeFromLocation(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (declaration as any)?.location,
+        ),
+        source: 'typechecker',
+      });
+    }
+  }
+
+  diagnostics.sort((a, b) => (
+    a.range.startLine === b.range.startLine
+      ? a.range.startColumn - b.range.startColumn
+      : a.range.startLine - b.range.startLine
+  ));
+
+  return { ctx, diagnostics, parseSuccessful, typeCheckSuccessful };
 }
 
 const diagnosticsWorkerAPI: DiagnosticsWorkerAPI = {
   async checkSource(sourceCode) {
-    try {
-      const [
-        parserModule,
-        contextModule,
-        typesModule,
-      ] = await Promise.all([
-        import('@pie/parser/parser'),
-        import('@pie/utils/context'),
-        import('@pie/types/utils'),
-      ]);
-
-      const {
-        schemeParse,
-        pieDeclarationParser,
-        Claim,
-        Definition,
-        DefineTactically,
-      } = parserModule;
-      const {
-        initCtx,
-        addClaimToContext,
-        addDefineToContext,
-        addDefineTacticallyToContext,
-      } = contextModule;
-      const { go, stop } = typesModule;
-
-      let astList: unknown[];
-      try {
-        astList = schemeParse(sourceCode) as unknown[];
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Failed to parse source';
-        return {
-          diagnostics: [
-            {
-              severity: 'error',
-              message: cleanDiagnosticMessage(message),
-              range: rangeFromLocation(
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (error as any)?.location,
-              ),
-              source: 'parser',
-            },
-          ],
-          parseSuccessful: false,
-          typeCheckSuccessful: false,
-        };
-      }
-
-      if (!Array.isArray(astList)) {
-        return {
-          diagnostics: [],
-          parseSuccessful: false,
-          typeCheckSuccessful: false,
-        };
-      }
-
-      const diagnostics: Diagnostic[] = [];
-      let parseSuccessful = true;
-      let typeCheckSuccessful = true;
-      let ctx = initCtx;
-
-      for (const ast of astList) {
-        let sourceDeclaration: unknown;
-
-        try {
-          sourceDeclaration =
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            pieDeclarationParser.parseDeclaration(ast as any);
-        } catch (error) {
-          parseSuccessful = false;
-          typeCheckSuccessful = false;
-          const message =
-            error instanceof Error ? error.message : 'Failed to parse declaration';
-          diagnostics.push({
-            severity: 'error',
-            message: cleanDiagnosticMessage(message),
-            range: rangeFromLocation(
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              (ast as any)?.location,
-            ),
-            source: 'parser',
-          });
-          continue;
-        }
-
-        try {
-          if (sourceDeclaration instanceof Claim) {
-            const result = addClaimToContext(
-              ctx,
-              sourceDeclaration.name,
-              sourceDeclaration.location,
-              sourceDeclaration.type,
-            );
-
-            if (result instanceof go) {
-              ctx = result.result;
-            } else if (result instanceof stop) {
-              typeCheckSuccessful = false;
-              diagnostics.push({
-                severity: 'error',
-                message: resultMessageToText(result.message),
-                range: rangeFromLocation(
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  (result as any).where ?? sourceDeclaration.location,
-                ),
-                source: 'typechecker',
-              });
-            }
-          } else if (sourceDeclaration instanceof Definition) {
-            const result = addDefineToContext(
-              ctx,
-              sourceDeclaration.name,
-              sourceDeclaration.location,
-              sourceDeclaration.expr,
-            );
-
-            if (result instanceof go) {
-              ctx = result.result;
-            } else if (result instanceof stop) {
-              typeCheckSuccessful = false;
-              diagnostics.push({
-                severity: 'error',
-                message: resultMessageToText(result.message),
-                range: rangeFromLocation(
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  (result as any).where ?? sourceDeclaration.location,
-                ),
-                source: 'typechecker',
-              });
-            }
-          } else if (sourceDeclaration instanceof DefineTactically) {
-            const result = addDefineTacticallyToContext(
-              ctx,
-              sourceDeclaration.name,
-              sourceDeclaration.location,
-              sourceDeclaration.tactics,
-            );
-
-            if (result instanceof go) {
-              ctx = result.result.context;
-            } else if (result instanceof stop) {
-              typeCheckSuccessful = false;
-              diagnostics.push({
-                severity: 'error',
-                message: resultMessageToText(result.message),
-                range: rangeFromLocation(
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  (result as any).where ?? sourceDeclaration.location,
-                ),
-                source: 'typechecker',
-              });
-            }
-          }
-        } catch (error) {
-          typeCheckSuccessful = false;
-          const message =
-            error instanceof Error ? error.message : 'Failed to check declaration';
-          diagnostics.push({
-            severity: 'error',
-            message: cleanDiagnosticMessage(message),
-            range: rangeFromLocation(
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              (sourceDeclaration as any)?.location,
-            ),
-            source: 'typechecker',
-          });
-        }
-      }
-
-      diagnostics.sort((a, b) => {
-        if (a.range.startLine !== b.range.startLine) {
-          return a.range.startLine - b.range.startLine;
-        }
-        return a.range.startColumn - b.range.startColumn;
-      });
-
-      return {
-        diagnostics,
-        parseSuccessful,
-        typeCheckSuccessful,
-      };
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Failed to check source';
-      return {
-        diagnostics: [
-          {
-            severity: 'error',
-            message: cleanDiagnosticMessage(message),
-            range: {
-              startLine: 1,
-              startColumn: 1,
-              endLine: 1,
-              endColumn: 2,
-            },
-            source: 'typechecker',
-          },
-        ],
-        parseSuccessful: false,
-        typeCheckSuccessful: false,
-      };
-    }
+    const { diagnostics, parseSuccessful, typeCheckSuccessful } =
+      await buildContext(sourceCode);
+    return { diagnostics, parseSuccessful, typeCheckSuccessful };
   },
 
-  async getHoverInfo(_sourceCode, _line, _column) {
-    // TODO: Integrate with Pie interpreter
-    return null;
+  async getHoverInfo(sourceCode, line, column) {
+    const token = tokenAt(sourceCode, line, column);
+    if (!token) return null;
+
+    try {
+      const { ctx } = await buildContext(sourceCode);
+      const binder = ctx.get(token);
+      if (!binder) return null;
+      return {
+        type: binder.type.readBackType(ctx).prettyPrint(),
+        documentation: token,
+      };
+    } catch {
+      return null;
+    }
   },
 
   async getCompletions(sourceCode, line, column) {
-    const prefix = getTokenAtCursor(sourceCode, line, column);
-    const userSymbols = extractUserSymbols(sourceCode);
-    const allItems = [...PIE_KEYWORDS, ...TACTIC_NAMES, ...userSymbols];
-
+    const prefix = completionPrefix(sourceCode, line, column).toLowerCase();
+    const allItems = [...PIE_COMPLETIONS, ...extractUserSymbols(sourceCode)];
     const seen = new Set<string>();
-    const dedupedItems: CompletionItem[] = [];
-    for (const item of allItems) {
-      if (!seen.has(item.label)) {
-        seen.add(item.label);
-        dedupedItems.push(item);
-      }
-    }
 
-    return filterByPrefix(dedupedItems, prefix);
+    return allItems.filter((item) => {
+      if (seen.has(item.label)) return false;
+      seen.add(item.label);
+      return !prefix || item.label.toLowerCase().startsWith(prefix);
+    });
   },
 };
 

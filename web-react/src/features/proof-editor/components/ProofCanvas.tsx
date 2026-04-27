@@ -2,8 +2,8 @@ import { useCallback, useRef, useMemo, useEffect, useState } from "react";
 import {
   ReactFlow,
   Background,
+  Controls,
   MiniMap,
-  Panel,
   useReactFlow,
   type NodeMouseHandler,
   type NodeChange,
@@ -22,10 +22,11 @@ import type {
   TacticNode,
   TacticNodeData,
 } from "../store/types";
-import { TACTIC_REQUIREMENTS, type TacticType } from "@pie/protocol";
+import type { TacticType } from "@pie/protocol";
+import { TACTIC_REQUIREMENTS } from "@pie/protocol";
 import type { GhostTacticNodeData } from "./nodes/GhostTacticNode";
-import { useDemoData } from "../hooks/useDemoData";
 import { useHintSystem } from "../hooks/useHintSystem";
+import { useAutoLayout } from "../hooks/useAutoLayout";
 import { TACTICS } from "../data/tactics";
 import { applyTactic as triggerApplyTactic } from "../utils/tactic-callback";
 
@@ -36,11 +37,12 @@ import { applyTactic as triggerApplyTactic } from "../utils/tactic-callback";
  * Renders the proof tree with custom goal, tactic, and lemma nodes.
  */
 export function ProofCanvas() {
-  // Initialize demo data for testing
-  useDemoData();
+  // Second-pass layout: reposition nodes using actual measured sizes once
+  // React Flow has rendered them (fires after every syncFromWorker call)
+  useAutoLayout();
 
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
 
   // State for delete confirmation dialog
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
@@ -55,6 +57,7 @@ export function ProofCanvas() {
   const nodes = useProofStore((s) => s.nodes);
   const edges = useProofStore((s) => s.edges);
   const sessionId = useProofStore((s) => s.sessionId);
+  const rootGoalId = useProofStore((s) => s.rootGoalId);
   const onNodesChange = useProofStore((s) => s.onNodesChange);
   const onEdgesChange = useProofStore((s) => s.onEdgesChange);
   const storeOnConnect = useProofStore((s) => s.onConnect);
@@ -85,8 +88,10 @@ export function ProofCanvas() {
 
   // Register hint callback for GoalNode
   useEffect(() => {
+    console.log("[ProofCanvas] Registering hint callback");
     setRequestHintCallback(requestHint);
     return () => {
+      console.log("[ProofCanvas] Unregistering hint callback");
       setRequestHintCallback(null);
     };
   }, [requestHint]);
@@ -215,6 +220,10 @@ export function ProofCanvas() {
           });
 
           // Now trigger application since the tactic is ready
+          console.log(
+            "[ProofCanvas] Context edge connected, applying tactic:",
+            tacticNode.data.tacticType,
+          );
           await triggerApplyTactic(
             goalNode.id,
             tacticNode.data.tacticType,
@@ -246,6 +255,7 @@ export function ProofCanvas() {
 
         // If no session (e.g. demo mode), don't try to call backend
         if (!sessionId) {
+          console.log("[ProofCanvas] Todo tactic applied locally (no session)");
           return;
         }
       }
@@ -255,6 +265,10 @@ export function ProofCanvas() {
         tacticNode.data.status === "ready" ||
         tacticNode.data.tacticType === "todo"
       ) {
+        console.log(
+          "[ProofCanvas] Edge connected to ready tactic, applying:",
+          tacticNode.data.tacticType,
+        );
         await triggerApplyTactic(
           goalNode.id,
           tacticNode.data.tacticType,
@@ -297,6 +311,10 @@ export function ProofCanvas() {
     event.dataTransfer.dropEffect = "copy";
   }, []);
 
+  // Derive parameterless tactics from protocol (no variableName, no expression)
+  const PARAMETERLESS_TACTICS = (Object.keys(TACTIC_REQUIREMENTS) as TacticType[])
+    .filter(t => !TACTIC_REQUIREMENTS[t].variableName && !TACTIC_REQUIREMENTS[t].expression);
+
   // Handle drop to create a new tactic node
   const onDrop = useCallback(
     (event: React.DragEvent) => {
@@ -317,11 +335,9 @@ export function ProofCanvas() {
         y: event.clientY,
       });
 
-      const requirements = TACTIC_REQUIREMENTS[tacticType];
-      const protocolParameterless =
-        !requirements.variableName && !requirements.expression;
-      const initialStatus =
-        tacticType !== "intro" && protocolParameterless ? "ready" : "incomplete";
+      // Parameterless tactics start as 'ready', others start as 'incomplete'
+      const isParameterless = PARAMETERLESS_TACTICS.includes(tacticType);
+      const initialStatus = isParameterless ? "ready" : "incomplete";
 
       // Create the tactic node
       const newNodeId = addTacticNode(
@@ -417,6 +433,36 @@ export function ProofCanvas() {
     return ghosts;
   }, [goalHints, acceptGhostNode, dismissGhostNode, getMoreDetail]);
 
+  const viewportSignature = useMemo(
+    () =>
+      ghostNodes
+        .map((ghost) => `${ghost.id}:${ghost.data.hint.level}`)
+        .join("|"),
+    [ghostNodes],
+  );
+
+  // Fit the full canvas when a new proof session starts.
+  useEffect(() => {
+    if (!sessionId || !rootGoalId || nodes.length === 0) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      void fitView({ padding: 0.3, maxZoom: 1.2, duration: 200 });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [fitView, rootGoalId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Gently re-fit when ghost hint nodes appear or change level.
+  useEffect(() => {
+    if (!sessionId || !viewportSignature) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      void fitView({ padding: 0.3, maxZoom: 1.2, duration: 200 });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [fitView, sessionId, viewportSignature]);
+
   // Compute which nodes should be hidden due to branch collapse
   const hiddenNodeIds = useMemo(() => {
     const hidden = new Set<string>();
@@ -444,14 +490,13 @@ export function ProofCanvas() {
   }, [edges, collapsedBranches]);
 
   // Combine regular nodes with ghost nodes and apply hidden property
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const allNodes = useMemo(() => {
     const visibleNodes = nodes.map(node => ({
       ...node,
       hidden: hiddenNodeIds.has(node.id)
     }));
-    return [...visibleNodes, ...ghostNodes] as Array<
-      ProofNode | Node<GhostTacticNodeData>
-    >;
+    return [...visibleNodes, ...ghostNodes] as any[];
   }, [nodes, ghostNodes, hiddenNodeIds]);
 
   // Create ghost edges connecting goals to ghost nodes
@@ -508,75 +553,63 @@ export function ProofCanvas() {
         defaultEdgeOptions={{
           type: "smoothstep",
           animated: false,
-          pathOptions: { borderRadius: 12, offset: 24 },
         }}
         connectionLineStyle={{ stroke: "#94a3b8", strokeWidth: 2 }}
+        connectionRadius={40}
         proOptions={{
           hideAttribution: true,
         }}
       >
         <Background color="#e5e7eb" gap={16} />
-
-        {/* Bottom-left: zoom controls + optional Reset/Expand */}
-        <Panel position="bottom-left">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {/* Zoom toolbar */}
-            <div style={{ display: 'flex', flexDirection: 'column', background: '#fff', borderRadius: 6, boxShadow: '0 1px 4px rgba(0,0,0,0.12)', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
-              <button
-                onClick={() => zoomIn({ duration: 200 })}
-                title="Zoom in"
-                style={{ padding: '6px 8px', border: 'none', background: 'none', cursor: 'pointer', color: '#374151', lineHeight: 1 }}
-                onMouseEnter={e => (e.currentTarget.style.background = '#f9fafb')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-              >
-                <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M6.5 2v9M2 6.5h9" /></svg>
-              </button>
-              <div style={{ height: 1, background: '#e5e7eb' }} />
-              <button
-                onClick={() => zoomOut({ duration: 200 })}
-                title="Zoom out"
-                style={{ padding: '6px 8px', border: 'none', background: 'none', cursor: 'pointer', color: '#374151', lineHeight: 1 }}
-                onMouseEnter={e => (e.currentTarget.style.background = '#f9fafb')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-              >
-                <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M2 6.5h9" /></svg>
-              </button>
-              <div style={{ height: 1, background: '#e5e7eb' }} />
-              <button
-                onClick={() => fitView({ padding: 0.2, duration: 300 })}
-                title="Fit view"
-                style={{ padding: '6px 8px', border: 'none', background: 'none', cursor: 'pointer', color: '#374151', lineHeight: 1 }}
-                onMouseEnter={e => (e.currentTarget.style.background = '#f9fafb')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-              >
-                <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M1 4V1h3M12 4V1H9M1 9v3h3M12 9v3H9" /></svg>
-              </button>
-            </div>
-
-            {/* Reset Layout / Expand All — only when relevant */}
+        <Controls />
+        {/* Control buttons - Reset Layout and Expand All */}
+        {(hasManualPositions || hasCollapsedBranches) && (
+          <div className="absolute bottom-4 left-4 z-10 flex gap-2">
             {hasManualPositions && (
               <button
                 onClick={clearManualPositions}
-                title="Reset to auto-layout"
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: '0 1px 4px rgba(0,0,0,0.12)', cursor: 'pointer', fontSize: 11, fontWeight: 500, color: '#374151' }}
+                className="flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-md ring-1 ring-gray-200 hover:bg-gray-50"
+                title="Reset nodes to auto-layout positions"
               >
-                <svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z" clipRule="evenodd" /></svg>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="h-3.5 w-3.5"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
+                    clipRule="evenodd"
+                  />
+                </svg>
                 Reset Layout
               </button>
             )}
             {hasCollapsedBranches && (
               <button
                 onClick={expandAllBranches}
-                title="Expand all branches"
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: '0 1px 4px rgba(0,0,0,0.12)', cursor: 'pointer', fontSize: 11, fontWeight: 500, color: '#374151' }}
+                className="flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-md ring-1 ring-gray-200 hover:bg-gray-50"
+                title="Expand all collapsed branches"
               >
-                <svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" /></svg>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="h-3.5 w-3.5"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                    clipRule="evenodd"
+                  />
+                </svg>
                 Expand All
               </button>
             )}
           </div>
-        </Panel>
-        {nodes.length > 8 && <MiniMap
+        )}
+        <MiniMap
           nodeStrokeColor={(node) => {
             if (node.type === "goal") {
               const data = node.data as { status?: string };
@@ -604,8 +637,8 @@ export function ProofCanvas() {
             return "#f3f4f6";
           }}
           maskColor="rgba(0, 0, 0, 0.1)"
-          className="!bottom-24 !right-4"
-        />}
+          className="!bottom-4 !right-4 !h-24 !w-32"
+        />
       </ReactFlow>
 
       {/* Delete confirmation dialog */}
