@@ -27,6 +27,7 @@ import { TACTIC_REQUIREMENTS } from "@pie/protocol";
 import type { GhostTacticNodeData } from "./nodes/GhostTacticNode";
 import { useDemoData } from "../hooks/useDemoData";
 import { useHintSystem } from "../hooks/useHintSystem";
+import { useAutoLayout } from "../hooks/useAutoLayout";
 import { TACTICS } from "../data/tactics";
 import { applyTactic as triggerApplyTactic } from "../utils/tactic-callback";
 
@@ -39,6 +40,10 @@ import { applyTactic as triggerApplyTactic } from "../utils/tactic-callback";
 export function ProofCanvas() {
   // Initialize demo data for testing
   useDemoData();
+
+  // Second-pass layout: reposition nodes using actual measured sizes once
+  // React Flow has rendered them (fires after every syncFromWorker call)
+  useAutoLayout();
 
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition } = useReactFlow();
