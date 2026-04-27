@@ -638,7 +638,7 @@ export function ProofCanvas() {
             return "#f3f4f6";
           }}
           maskColor="rgba(0, 0, 0, 0.1)"
-          className="!bottom-4 !right-4 !h-24 !w-32"
+          style={{ width: 128, height: 96, bottom: 16, right: 16 }}
         />
       </ReactFlow>
 

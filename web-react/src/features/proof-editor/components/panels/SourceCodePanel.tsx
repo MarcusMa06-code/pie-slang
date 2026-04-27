@@ -2,6 +2,9 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import Editor, { type OnMount, type BeforeMount, type Monaco } from '@monaco-editor/react';
 import { useProofSession } from '../../hooks/useProofSession';
 import { useExampleStore } from '../../store/example-store';
+import { diagnosticsWorker } from '@/shared/lib/worker-client';
+
+const SEVERITY_MAP = { error: 8, warning: 4, info: 2, hint: 1 } as const;
 
 const SAMPLE_SOURCE = `; Define addition function
 (claim + (-> Nat Nat Nat))
@@ -217,6 +220,7 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
   const [sourceCode, setSourceCode] = useState(SAMPLE_SOURCE);
   const [claimName, setClaimName] = useState('reflexivity');
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const monacoRef = useRef<Monaco | null>(null);
 
   const exampleSource = useExampleStore((s) => s.exampleSource);
   const exampleClaim = useExampleStore((s) => s.exampleClaim);
@@ -255,8 +259,50 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
 
   const handleMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
+    monacoRef.current = monaco;
     monaco.editor.setTheme('pie-dark');
+    // Run diagnostics immediately on mount so initial errors show at once
+    const model = editor.getModel();
+    if (model) {
+      diagnosticsWorker.checkSource(editor.getValue()).then((result) => {
+        monaco.editor.setModelMarkers(model, 'pie', result.diagnostics.map((d) => ({
+          severity: SEVERITY_MAP[d.severity] ?? 8,
+          message: d.message,
+          startLineNumber: d.range.startLine,
+          startColumn: d.range.startColumn,
+          endLineNumber: d.range.endLine,
+          endColumn: d.range.endColumn,
+          source: d.source,
+        })));
+      }).catch(() => { /* worker not ready — first edit will trigger */ });
+    }
   }, []);
+
+  // Debounced diagnostics: re-run typechecker 600ms after user stops typing
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      const monaco = monacoRef.current;
+      const editor = editorRef.current;
+      if (!monaco || !editor) return;
+      const model = editor.getModel();
+      if (!model) return;
+      try {
+        const result = await diagnosticsWorker.checkSource(sourceCode);
+        monaco.editor.setModelMarkers(model, 'pie', result.diagnostics.map((d) => ({
+          severity: SEVERITY_MAP[d.severity] ?? 8,
+          message: d.message,
+          startLineNumber: d.range.startLine,
+          startColumn: d.range.startColumn,
+          endLineNumber: d.range.endLine,
+          endColumn: d.range.endColumn,
+          source: d.source,
+        })));
+      } catch {
+        // worker error — ignore, don't clear existing markers
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [sourceCode]);
 
   const syncBadgeClass = isLoading
     ? 'pe-sync-badge syncing'
