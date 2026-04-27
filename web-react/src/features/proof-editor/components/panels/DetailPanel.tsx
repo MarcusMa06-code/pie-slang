@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useProofStore, useUIStore } from '../../store';
-import type { GoalNode } from '../../store/types';
+import type { GoalNode, TacticNode } from '../../store/types';
 import { TACTICS } from '../../data/tactics';
+import { applyTactic } from '../../utils/tactic-callback';
 import type { GlobalEntry } from '@pie/protocol';
 
 interface DetailPanelProps {
@@ -11,7 +12,6 @@ interface DetailPanelProps {
 
 type Tab = 'details' | 'context' | 'history';
 
-// Suggested tactics based on goal type heuristics
 function getSuggestedTactics(goalType: string): string[] {
   const suggestions: string[] = [];
   if (goalType.includes('Pi') || goalType.includes('->')) suggestions.push('intro');
@@ -21,6 +21,11 @@ function getSuggestedTactics(goalType: string): string[] {
   if (goalType.includes('= ')) suggestions.push('symm', 'cong');
   suggestions.push('exact');
   return [...new Set(suggestions)].slice(0, 5);
+}
+
+function formatTime(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProps) {
@@ -40,6 +45,22 @@ export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProp
     ? getSuggestedTactics(goalNode.data.goalType)
     : [];
 
+  // Applied tactics sorted by appliedAt for History tab
+  const appliedTactics = (nodes.filter(
+    (n) => n.type === 'tactic' && (n.data as TacticNode['data']).status === 'applied'
+  ) as TacticNode[]).sort((a, b) => {
+    const at = a.data.appliedAt ?? 0;
+    const bt = b.data.appliedAt ?? 0;
+    return at - bt;
+  });
+
+  // Goal lookup for history rendering
+  const goalMap = new Map(
+    nodes
+      .filter((n) => n.type === 'goal')
+      .map((n) => [n.id, n as GoalNode])
+  );
+
   const hasContent = selectedNode || definitions.length > 0 || theorems.length > 0;
 
   return (
@@ -53,6 +74,20 @@ export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProp
             onClick={() => setActiveTab(tab)}
           >
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tab === 'history' && appliedTactics.length > 0 && (
+              <span style={{
+                marginLeft: 4,
+                fontSize: 9.5,
+                padding: '0px 4px',
+                borderRadius: 99,
+                background: activeTab === 'history' ? 'var(--pe-accent)' : 'var(--pe-line)',
+                color: activeTab === 'history' ? '#fff' : 'var(--pe-ink-2)',
+                fontWeight: 600,
+                verticalAlign: 'middle',
+              }}>
+                {appliedTactics.length}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -62,7 +97,6 @@ export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProp
         {/* ── DETAILS TAB ── */}
         {activeTab === 'details' && (
           <>
-            {/* Selected node info */}
             {selectedNode ? (
               <div className="pe-d-section" style={{ paddingBottom: 10 }}>
                 <div className="pe-d-section-hd">
@@ -120,11 +154,35 @@ export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProp
                   <span className="pe-d-section-label">Suggested tactics</span>
                 </div>
                 <div className="pe-suggested">
-                  {suggestions.map((name) => (
-                    <span key={name} className="pe-chip" title={TACTICS.find(t => t.type === name)?.description}>
-                      {name}
-                    </span>
-                  ))}
+                  {suggestions.map((name) => {
+                    const tacticInfo = TACTICS.find(t => t.type === name);
+                    const needsCtx = tacticInfo?.requiresContextVar;
+                    return (
+                      <button
+                        key={name}
+                        className="pe-chip"
+                        title={needsCtx ? `${tacticInfo?.description ?? name} · drag from palette to connect context` : (tacticInfo?.description ?? name)}
+                        style={{
+                          cursor: needsCtx ? 'help' : 'pointer',
+                          border: 'none',
+                          background: undefined,
+                          opacity: needsCtx ? 0.6 : 1,
+                        }}
+                        onClick={() => {
+                          if (needsCtx) return;
+                          applyTactic(goalNode.id, name as Parameters<typeof applyTactic>[1], {});
+                        }}
+                      >
+                        {name}
+                        {needsCtx && (
+                          <span style={{ marginLeft: 3, fontSize: 9, color: 'var(--pe-faint)' }}>ctx</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 10.5, color: 'var(--pe-faint)', marginTop: 4 }}>
+                  Click to apply · <span style={{ opacity: 0.7 }}>ctx</span> tactics need a context variable — drag from palette
                 </div>
               </div>
             )}
@@ -220,9 +278,105 @@ export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProp
 
         {/* ── HISTORY TAB ── */}
         {activeTab === 'history' && (
-          <div className="pe-d-section" style={{ color: 'var(--pe-faint)', fontSize: 12 }}>
-            Proof history coming soon
-          </div>
+          <>
+            {appliedTactics.length === 0 ? (
+              <div className="pe-d-section" style={{ color: 'var(--pe-faint)', fontSize: 12 }}>
+                No tactics applied yet · apply a tactic to see proof history
+              </div>
+            ) : (
+              <div className="pe-d-section">
+                <div className="pe-d-section-hd">
+                  <span className="pe-d-section-label">Applied tactics</span>
+                  <span className="pe-d-section-count">{appliedTactics.length}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {appliedTactics.map((tactic, idx) => {
+                    const parentGoal = tactic.data.connectedGoalId
+                      ? goalMap.get(tactic.data.connectedGoalId)
+                      : undefined;
+                    const goalType = parentGoal?.data.goalType ?? '';
+                    const truncatedGoal = goalType.length > 32 ? goalType.slice(0, 32) + '…' : goalType;
+                    return (
+                      <div
+                        key={tactic.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 8,
+                          padding: '6px 0',
+                          borderBottom: idx < appliedTactics.length - 1 ? '1px solid var(--pe-line-2)' : 'none',
+                        }}
+                      >
+                        {/* Step number */}
+                        <span style={{
+                          flexShrink: 0,
+                          width: 18,
+                          height: 18,
+                          borderRadius: '50%',
+                          background: 'var(--pe-ok)',
+                          color: '#fff',
+                          fontSize: 9.5,
+                          fontWeight: 700,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginTop: 1,
+                        }}>
+                          {idx + 1}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{
+                              fontFamily: 'var(--pe-mono-font)',
+                              fontSize: 12.5,
+                              fontWeight: 600,
+                              color: 'var(--pe-ink)',
+                            }}>
+                              {tactic.data.displayName}
+                            </span>
+                            <button
+                              style={{
+                                fontSize: 10,
+                                color: 'var(--pe-accent)',
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: 0,
+                                textDecoration: 'underline',
+                                textDecorationStyle: 'dotted',
+                              }}
+                              onClick={() => selectNode(tactic.id)}
+                              title="Select this tactic node"
+                            >
+                              select
+                            </button>
+                          </div>
+                          {truncatedGoal && (
+                            <div style={{
+                              fontFamily: 'var(--pe-mono-font)',
+                              fontSize: 10.5,
+                              color: 'var(--pe-faint)',
+                              marginTop: 1,
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}>
+                              {truncatedGoal}
+                            </div>
+                          )}
+                          {tactic.data.appliedAt && (
+                            <div style={{ fontSize: 10, color: 'var(--pe-faint)', marginTop: 1 }}>
+                              {formatTime(tactic.data.appliedAt)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
       </div>

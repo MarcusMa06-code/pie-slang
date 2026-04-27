@@ -115,6 +115,13 @@ export const useProofStore = create<ProofStore>()(
           const node = state.nodes.find((n) => n.id === id);
           if (node) {
             Object.assign(node.data, data);
+            if (
+              node.type === "tactic" &&
+              (data as Partial<TacticNodeData>).status === "applied" &&
+              !(node.data as TacticNodeData).appliedAt
+            ) {
+              (node.data as TacticNodeData).appliedAt = Date.now();
+            }
           }
         });
       },
