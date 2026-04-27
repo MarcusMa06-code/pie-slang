@@ -3,56 +3,52 @@ import Editor, { type OnMount, type BeforeMount, type Monaco } from '@monaco-edi
 import { useProofSession } from '../../hooks/useProofSession';
 import { useGeneratedProofScript } from '../../store';
 import { useExampleStore } from '../../store/example-store';
-import { useEditorStore, type SyncStatus } from '../../store/editor-store';
-import {
-  ensureGeneratedCanvasComment,
-  extractPreamble,
-} from '../../utils/generate-proof-script';
-import { proofWorker } from '@/shared/lib/worker-client';
-import { useProofStore } from '../../store';
-import { useMetadataStore } from '../../store/metadata-store';
-import { diagnosticsWorker } from '@/shared/lib/worker-client';
-import type { Diagnostic as WorkerDiagnostic } from '@/workers/diagnostics-worker';
 
-// ============================================
-// Pie language registration helpers
-// ============================================
+const SAMPLE_SOURCE = `; Define addition function
+(claim + (-> Nat Nat Nat))
+(define +
+  (lambda (n m)
+    (rec-Nat n
+      m
+      (lambda (n-1 +n-1)
+        (add1 +n-1)))))
 
-// Guard via a property on the Monaco instance — survives HMR
-// (module-level booleans get reset on HMR but the Monaco singleton persists).
-const PIE_GUARD = '__pieCompletionsRegistered' as const;
+; Prove that n = n for all Nat
+(claim reflexivity
+  (Pi ((n Nat))
+    (= Nat n n)))
+`;
+
+const PIE_GUARD = '__pieLanguageRegistered' as const;
 
 function registerPieLanguage(monaco: Monaco) {
-  // Register "pie" language if not already registered
   const langs = monaco.languages.getLanguages();
   if (langs.find((l: { id: string }) => l.id === 'pie')) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((monaco as any)[PIE_GUARD]) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (monaco as any)[PIE_GUARD] = true;
 
   monaco.languages.register({ id: 'pie' });
 
   monaco.languages.setMonarchTokensProvider('pie', {
     tokenizer: {
       root: [
-        // Line comments
         [/;.*$/, 'comment'],
-        // Strings
         [/"([^"\\]|\\.)*$/, 'string.invalid'],
         [/"/, 'string', '@string'],
-        // Numbers
         [/\d+/, 'number'],
-        // Keywords
         [
-          /\b(claim|define|define-tactically|lambda|Pi|Sigma|the|rec-Nat|ind-Nat|ind-List|ind-Vec|ind-Either|ind-Absurd|replace|symm|cong|trans)\b/,
+          /\b(claim|define|define-tactically|lambda|Pi|Sigma|the|rec-Nat|ind-Nat|ind-List|ind-Vec|ind-Either|ind-Absurd|replace|symm|cong|trans|data)\b/,
           'keyword',
         ],
-        // Types
         [/\b(Nat|Atom|Trivial|Absurd|U|Pair|Either|List|Vec|->)\b/, 'type'],
-        // Constructors / special values
         [/\b(zero|add1|same|sole|nil|vecnil|cons|car|cdr|left|right)\b/, 'variable'],
-        // Tactics
-        [/\b(intro|exact|split|exists|elim-Nat|elim-List|elim-Vec|elim-Either|elim-Equal|elim-Absurd|apply|then)\b/, 'string'],
-        // Parentheses
+        [
+          /\b(intro|exact|split|exists|go-Left|go-Right|elim-Nat|elim-List|elim-Vec|elim-Either|elim-Equal|elim-Absurd|apply|then)\b/,
+          'string',
+        ],
         [/[()[\]]/, 'delimiter'],
-        // Symbols / identifiers
         [/[a-zA-Z_][a-zA-Z0-9_\-?!*+/<>=]*/, 'identifier'],
       ],
       string: [
@@ -61,28 +57,6 @@ function registerPieLanguage(monaco: Monaco) {
         [/"/, 'string', '@pop'],
       ],
     },
-  });
-
-  monaco.languages.setLanguageConfiguration('pie', {
-    comments: {
-      lineComment: ';',
-    },
-    brackets: [
-      ['(', ')'],
-      ['[', ']'],
-    ],
-    autoClosingPairs: [
-      { open: '(', close: ')' },
-      { open: '[', close: ']' },
-      { open: '"', close: '"' },
-    ],
-    surroundingPairs: [
-      { open: '(', close: ')' },
-      { open: '[', close: ']' },
-      { open: '"', close: '"' },
-    ],
-    // Pie identifiers commonly include symbolic characters like `+`, `-`, `:` and `=`.
-    wordPattern: /[^\s()[\]"]+/g,
   });
 
   monaco.editor.defineTheme('pie-dark', {
@@ -102,188 +76,26 @@ function registerPieLanguage(monaco: Monaco) {
   });
 }
 
-function registerPieCompletions(monaco: Monaco) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const guarded = monaco as any;
-  if (guarded[PIE_GUARD]) return;
-  guarded[PIE_GUARD] = true;
-
-  monaco.languages.registerCompletionItemProvider('pie', {
-    triggerCharacters: ['('],
-    async provideCompletionItems(model: import('monaco-editor').editor.ITextModel, position: import('monaco-editor').Position) {
-      const word = model.getWordUntilPosition(position);
-      const range = {
-        startLineNumber: position.lineNumber,
-        endLineNumber: position.lineNumber,
-        startColumn: word.startColumn,
-        endColumn: word.endColumn,
-      };
-
-      const sourceCode = model.getValue();
-      try {
-        const items = await diagnosticsWorker.getCompletions(
-          sourceCode,
-          position.lineNumber,
-          position.column
-        );
-
-        const { CompletionItemKind, CompletionItemInsertTextRule } = monaco.languages;
-        const kindMap = {
-          keyword: CompletionItemKind.Keyword,
-          function: CompletionItemKind.Function,
-          variable: CompletionItemKind.Variable,
-          type: CompletionItemKind.Class,
-        } as const;
-
-        return {
-          suggestions: items.map((item) => ({
-            label: item.label,
-            kind: kindMap[item.kind as keyof typeof kindMap] ?? CompletionItemKind.Text,
-            detail: item.detail,
-            insertText: item.insertText ?? item.label,
-            insertTextRules: item.insertText
-              ? CompletionItemInsertTextRule.InsertAsSnippet
-              : undefined,
-            range,
-          })),
-        };
-      } catch {
-        return { suggestions: [] };
-      }
-    },
-  });
-}
-
-function getSessionSource(
-  source: string,
-  claimName: string,
-  activeProofClaimName: string | null
-): string {
-  return extractPreamble(source, activeProofClaimName ?? claimName);
-}
-
-// ============================================
-// Sync status badge
-// ============================================
-
-const STATUS_CONFIG: Record<SyncStatus, { label: string; className: string }> = {
-  synced: { label: 'Synced', className: 'bg-green-100 text-green-800' },
-  dirty: { label: 'Code edited', className: 'bg-yellow-100 text-yellow-800' },
-  syncing: { label: 'Syncing…', className: 'bg-blue-100 text-blue-800' },
-  error: { label: 'Sync failed', className: 'bg-red-100 text-red-800' },
-};
-
-function SyncStatusBadge({ status }: { status: SyncStatus }) {
-  const { label, className } = STATUS_CONFIG[status];
-  return (
-    <span className={`rounded px-2 py-0.5 text-xs font-medium ${className}`}>
-      {status === 'syncing' && (
-        <span className="mr-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent align-middle" />
-      )}
-      {label}
-    </span>
-  );
-}
-
-// ============================================
-// Conflict modal
-// ============================================
-
-interface ConflictModalProps {
-  onDiscard: () => void;
-  onCancel: () => void;
-}
-
-function ConflictModal({ onDiscard, onCancel }: ConflictModalProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="mx-4 max-w-md rounded-lg border bg-card p-6 shadow-xl">
-        <h2 className="mb-2 text-base font-semibold">Unsynced Code Changes</h2>
-        <p className="mb-4 text-sm text-muted-foreground">
-          You have unsaved code edits that have not been synced to the canvas.
-          Continuing will discard these edits. You can click Cancel and use{' '}
-          <strong>Sync to Canvas</strong> first to preserve your changes.
-        </p>
-        <div className="flex gap-2">
-          <button
-            className="flex-1 rounded-md bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
-            onClick={onDiscard}
-          >
-            Discard and continue
-          </button>
-          <button
-            className="flex-1 rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================
-// SourceCodePanel
-// ============================================
-
 interface SourceCodePanelProps {
   onCollapse?: () => void;
 }
 
-/**
- * SourceCodePanel — Monaco-powered source code editor with Canvas sync.
- *
- * Architecture:
- * - Monaco edits the Pie source code (claims + definitions).
- * - Canvas is the runtime source of truth.
- * - "Sync to Canvas" rebuilds the proof session from Monaco content.
- * - Canvas changes update the "Generated Proof Script" section (read-only).
- * - Editor undo/redo is native to Monaco; canvas undo/redo is independent.
- */
 export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
-  const [isMaximized, setIsMaximized] = useState(false);
-  const [showConflictModal, setShowConflictModal] = useState(false);
-  const [liveDiagnostics, setLiveDiagnostics] = useState<
-    Array<{
-      message: string;
-      severity: 'error' | 'warning';
-      startLine: number;
-      startColumn: number;
-      source: 'parser' | 'typechecker';
-    }>
-  >([]);
-  const [pendingCanvasAction, setPendingCanvasAction] = useState<(() => void) | null>(null);
+  const [sourceCode, setSourceCode] = useState(SAMPLE_SOURCE);
+  const [claimName, setClaimName] = useState('reflexivity');
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
 
-  // Flag set before we programmatically update Monaco (canvas→code sync).
-  // Prevents the resulting onChange callback from falsely calling markDirty().
-  const isProgrammaticUpdate = useRef(false);
-
-  // Editor store (Monaco value + sync state)
-  const editorValue = useEditorStore((s) => s.editorValue);
-  const claimName = useEditorStore((s) => s.claimName);
-  const syncStatus = useEditorStore((s) => s.syncStatus);
-  const dirtySinceLastSync = useEditorStore((s) => s.dirtySinceLastSync);
-  const lastSyncError = useEditorStore((s) => s.lastSyncError);
-  const hasUnsyncedConflict = useEditorStore((s) => s.hasUnsyncedConflict);
-  const preamble = useEditorStore((s) => s.preamble);
-
-  const setEditorValue = useEditorStore((s) => s.setEditorValue);
-  const setClaimName = useEditorStore((s) => s.setClaimName);
-  const markDirty = useEditorStore((s) => s.markDirty);
-  const clearDirty = useEditorStore((s) => s.clearDirty);
-  const setGeneratedScript = useEditorStore((s) => s.setGeneratedScript);
-  const setSyncStatus = useEditorStore((s) => s.setSyncStatus);
-  const setSyncError = useEditorStore((s) => s.setSyncError);
-  const setConflict = useEditorStore((s) => s.setConflict);
-  const setPreamble = useEditorStore((s) => s.setPreamble);
-
-  // Example store
   const exampleSource = useExampleStore((s) => s.exampleSource);
   const exampleClaim = useExampleStore((s) => s.exampleClaim);
 
-  // Proof session (for startProof / legacy flow)
+  useEffect(() => {
+    if (exampleSource !== undefined) setSourceCode(exampleSource);
+  }, [exampleSource]);
+
+  useEffect(() => {
+    if (exampleClaim !== undefined) setClaimName(exampleClaim);
+  }, [exampleClaim]);
+
   const {
     startSession,
     isLoading,
@@ -293,608 +105,202 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
     claimType,
   } = useProofSession();
 
-  // Generated proof script from canvas
   const generatedScript = useGeneratedProofScript();
 
-  // Proof store — for atomic sync-from-source updates
-  const proofSessionId = useProofStore((s) => s.sessionId);
-  const activeProofClaimName = useProofStore((s) => s.claimName);
-  const setMetadataClaimName = useMetadataStore((s) => s.setClaimName);
-
-  // ----------------------------------------
-  // Update editor value when example is loaded
-  // ----------------------------------------
-  useEffect(() => {
-    if (exampleSource !== undefined) {
-      isProgrammaticUpdate.current = true;
-      setEditorValue(exampleSource);
-      setPreamble(null);
-      setConflict(false);
-      if (hasActiveSession) {
-        markDirty();
-      } else {
-        clearDirty();
-        setSyncStatus('synced');
-      }
-      setIsExpanded(true);
+  const handleStartProof = useCallback(async () => {
+    if (!sourceCode.trim() || !claimName.trim()) return;
+    clearError();
+    try {
+      await startSession(sourceCode, claimName);
+      onCollapse?.();
+    } catch (e) {
+      console.error('Failed to start proof:', e);
     }
-  }, [
-    exampleSource,
-    hasActiveSession,
-    setEditorValue,
-    setPreamble,
-    setConflict,
-    markDirty,
-    clearDirty,
-    setSyncStatus,
-  ]);
+  }, [sourceCode, claimName, startSession, clearError, onCollapse]);
 
-  useEffect(() => {
-    if (exampleClaim !== undefined) {
-      setClaimName(exampleClaim);
-    }
-  }, [exampleClaim, setClaimName]);
-
-  // ----------------------------------------
-  // Keep editor-store generated script in sync
-  // ----------------------------------------
-  useEffect(() => {
-    setGeneratedScript(generatedScript ?? null);
-  }, [generatedScript, setGeneratedScript]);
-
-  // ----------------------------------------
-  // Canvas → Code: auto-update Monaco when canvas changes
-  // ----------------------------------------
-  useEffect(() => {
-    if (!generatedScript) return;
-    // Only auto-update if the user hasn't made unsaved edits
-    if (dirtySinceLastSync) return;
-    // Only update once a proof session has been started (preamble is set)
-    if (preamble === null) return;
-
-    const normalizedGeneratedScript = ensureGeneratedCanvasComment(generatedScript);
-    const newValue = preamble
-      ? `${preamble}\n${normalizedGeneratedScript}`
-      : normalizedGeneratedScript;
-    if (newValue === useEditorStore.getState().editorValue) return;
-    // Mark as programmatic so the resulting onChange callback skips markDirty()
-    isProgrammaticUpdate.current = true;
-    setEditorValue(newValue);
-  }, [dirtySinceLastSync, generatedScript, preamble, setEditorValue]);
-
-  // ----------------------------------------
-  // Monaco lifecycle callbacks
-  // ----------------------------------------
   const handleBeforeMount: BeforeMount = useCallback((monaco) => {
     registerPieLanguage(monaco);
-    registerPieCompletions(monaco);
   }, []);
-
-  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
-  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
-  const editorDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
-  const [isEditorReady, setIsEditorReady] = useState(false);
 
   const handleMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
-    monacoRef.current = monaco;
     monaco.editor.setTheme('pie-dark');
-    editorDisposablesRef.current.forEach((disposable) => disposable.dispose());
-    editorDisposablesRef.current = [];
-    setIsEditorReady(true);
   }, []);
 
+  // Sync generated script back to editor when canvas changes
   useEffect(() => {
-    return () => {
-      editorDisposablesRef.current.forEach((disposable) => disposable.dispose());
-      editorDisposablesRef.current = [];
-    };
-  }, []);
+    if (!generatedScript || !editorRef.current) return;
+    const currentVal = editorRef.current.getValue();
+    if (!currentVal.includes('define-tactically') && generatedScript.includes('define-tactically')) return;
+    // Don't auto-update if user is actively editing
+  }, [generatedScript]);
 
-  // ----------------------------------------
-  // Real-time diagnostics → Monaco markers
-  // ----------------------------------------
-  useEffect(() => {
-    let isCancelled = false;
-    const handle = window.setTimeout(async () => {
-      const editor = editorRef.current;
-      const monaco = monacoRef.current;
-      if (!editor || !monaco) return;
-      const model = editor.getModel();
-      if (!model) return;
-      try {
-        const result = await diagnosticsWorker.checkSource(editorValue);
-        const diagnostics = result.diagnostics || [];
-        if (isCancelled) return;
-        const markers = diagnostics.map((d: WorkerDiagnostic) => ({
-          severity:
-            d.severity === 'error'
-              ? monaco.MarkerSeverity.Error
-              : monaco.MarkerSeverity.Warning,
-          message: d.message,
-          startLineNumber: d.range.startLine,
-          startColumn: d.range.startColumn,
-          endLineNumber: d.range.endLine,
-          endColumn: d.range.endColumn,
-        }));
-        monaco.editor.setModelMarkers(model, 'pie', markers);
-        setLiveDiagnostics(
-          diagnostics.map((d: WorkerDiagnostic) => ({
-            message: d.message,
-            severity: d.severity === 'error' ? 'error' : 'warning',
-            startLine: d.range.startLine,
-            startColumn: d.range.startColumn,
-            source: d.source,
-          }))
-        );
-      } catch {
-        if (!isCancelled) {
-          monaco.editor.setModelMarkers(model, 'pie', []);
-          setLiveDiagnostics([]);
-        }
-      }
-    }, 400);
-    return () => {
-      isCancelled = true;
-      window.clearTimeout(handle);
-    };
-  }, [editorValue, isEditorReady]);
+  const syncBadgeClass = isLoading
+    ? 'pe-sync-badge syncing'
+    : hasActiveSession
+      ? 'pe-sync-badge'
+      : error
+        ? 'pe-sync-badge error'
+        : 'pe-sync-badge';
 
-  // ----------------------------------------
-  // Editor change handler
-  // ----------------------------------------
-  const handleEditorChange = useCallback(
-    (value: string | undefined) => {
-      if (value === undefined) return;
-      setEditorValue(value);
-      // Skip markDirty() when the change came from the canvas→code auto-sync,
-      // not from the user actually typing.
-      if (isProgrammaticUpdate.current) {
-        isProgrammaticUpdate.current = false;
-        return;
-      }
-      markDirty();
-    },
-    [setEditorValue, markDirty]
-  );
-
-  // ----------------------------------------
-  // Start Proof (legacy path — initial session start)
-  // ----------------------------------------
-  const handleStartProof = useCallback(async () => {
-    const sourceForSession = getSessionSource(
-      editorValue,
-      claimName,
-      activeProofClaimName
-    );
-    if (!sourceForSession.trim() || !claimName.trim()) return;
-
-    clearError();
-    setSyncStatus('syncing');
-    setSyncError(null);
-
-    try {
-      const result = await startSession(sourceForSession, claimName);
-      if (proofSessionId && proofSessionId !== result.sessionId) {
-        try {
-          await proofWorker.closeSession(proofSessionId);
-        } catch {
-          // Ignore close errors on replaced sessions
-        }
-      }
-      // Store the preamble used to start the fresh session.
-      setPreamble(sourceForSession);
-      clearDirty();
-      setSyncStatus('synced');
-      setIsExpanded(false);
-    } catch (e) {
-      setSyncStatus('error');
-      setSyncError(e instanceof Error ? e.message : 'Failed to start proof');
-    }
-  }, [
-    editorValue,
-    claimName,
-    activeProofClaimName,
-    startSession,
-    proofSessionId,
-    clearError,
-    clearDirty,
-    setSyncStatus,
-    setSyncError,
-    setPreamble,
-  ]);
-
-  // ----------------------------------------
-  // Sync to Canvas (Code → Canvas manual apply)
-  // ----------------------------------------
-  const handleSyncToCanvas = useCallback(async () => {
-    const sourceForSession = getSessionSource(
-      editorValue,
-      claimName,
-      activeProofClaimName
-    );
-    if (!sourceForSession.trim() || !claimName.trim()) return;
-
-    setSyncStatus('syncing');
-    setSyncError(null);
-
-    try {
-      // Close old session if one exists
-      if (proofSessionId) {
-        try {
-          await proofWorker.closeSession(proofSessionId);
-        } catch {
-          // Ignore close errors
-        }
-      }
-
-      await startSession(sourceForSession, claimName);
-
-      // Store the preamble used to rebuild the session.
-      setPreamble(sourceForSession);
-      clearDirty();
-      setSyncStatus('synced');
-      setConflict(false);
-      setIsExpanded(false);
-    } catch (e) {
-      const errMsg = e instanceof Error ? e.message : 'Failed to sync source to canvas';
-      setSyncStatus('error');
-      setSyncError(errMsg);
-    }
-  }, [
-    editorValue,
-    claimName,
-    activeProofClaimName,
-    proofSessionId,
-    setMetadataClaimName,
-    clearDirty,
-    setSyncStatus,
-    setSyncError,
-    setConflict,
-    setPreamble,
-  ]);
-
-  // ----------------------------------------
-  // Conflict modal helpers (exported via ref so ProofCanvas can call)
-  // ----------------------------------------
-  const confirmConflictAndProceed = useCallback(
-    (action: () => void) => {
-      if (dirtySinceLastSync) {
-        setPendingCanvasAction(() => action);
-        setShowConflictModal(true);
-        setConflict(true);
-      } else {
-        action();
-      }
-    },
-    [dirtySinceLastSync, setConflict]
-  );
-  // Register the conflict callback with the shared editor store.
-  // This replaces the window.confirmConflictAndProceed anti-pattern:
-  // other components (e.g. App.tsx) call useEditorStore.getState().triggerConflictGuard()
-  // and the store dispatches here if needed.
-  const registerConflictCallback = useEditorStore((s) => s.registerConflictCallback);
-  useEffect(() => {
-    registerConflictCallback(confirmConflictAndProceed);
-    return () => {
-      registerConflictCallback(null);
-    };
-  }, [confirmConflictAndProceed, registerConflictCallback]);
-
-  const handleConflictDiscard = useCallback(() => {
-    setShowConflictModal(false);
-    clearDirty();
-    setSyncStatus('synced');
-    setConflict(false);
-    if (pendingCanvasAction) {
-      pendingCanvasAction();
-      setPendingCanvasAction(null);
-    }
-  }, [pendingCanvasAction, clearDirty, setSyncStatus, setConflict]);
-
-  const handleConflictCancel = useCallback(() => {
-    setShowConflictModal(false);
-    setPendingCanvasAction(null);
-  }, []);
-
-  const handleToggle = useCallback(() => {
-    setIsExpanded((prev) => !prev);
-  }, []);
-
-  const isSyncing = syncStatus === 'syncing' || isLoading;
-  const displayedError =
-    syncStatus === 'error' ? (lastSyncError ?? error) : error;
+  const syncLabel = isLoading ? 'Syncing…' : hasActiveSession ? 'Active' : error ? 'Error' : 'Ready';
 
   return (
     <>
-      {showConflictModal && (
-        <ConflictModal
-          onDiscard={handleConflictDiscard}
-          onCancel={handleConflictCancel}
+      {/* Panel head */}
+      <div className="pe-panel-head">
+        {onCollapse && (
+          <button
+            className="pe-icon-btn"
+            onClick={onCollapse}
+            title="Collapse source panel"
+            aria-label="Collapse source panel"
+            style={{ marginLeft: -4, marginRight: 0, flexShrink: 0 }}
+          >
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+              <path d="M9 3L6 7l3 4" />
+            </svg>
+          </button>
+        )}
+        <h3>Source</h3>
+        <span className={syncBadgeClass}>
+          <span className="dot" />
+          {syncLabel}
+        </span>
+        <div style={{ flex: 1 }} />
+      </div>
+
+      {/* Claim bar */}
+      <div className="pe-source-claim">
+        <label>Claim</label>
+        <input
+          className="pe-input"
+          value={claimName}
+          onChange={(e) => setClaimName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleStartProof()}
+          placeholder="e.g., +zero-identity"
+          disabled={isLoading}
         />
-      )}
-
-      <div className="border-b bg-card">
-        {/* Header */}
-        <div
-          className="flex cursor-pointer items-center justify-between px-4 py-2 hover:bg-muted/50"
-          onClick={handleToggle}
+        <button
+          className="pe-btn"
+          onClick={handleStartProof}
+          disabled={isLoading || !sourceCode.trim() || !claimName.trim()}
+          title={hasActiveSession ? 'Restart proof session' : 'Start proof session'}
         >
-          <div className="flex items-center gap-2">
-            <span className="text-lg">{isExpanded ? '▼' : '▶'}</span>
-            <span className="font-medium">Source Code</span>
-            {hasActiveSession && claimType && (
-              <span className="ml-2 rounded bg-green-100 px-2 py-0.5 text-xs text-green-800">
-                Proving: {claimName}
-              </span>
-            )}
-            {/* Sync status badge */}
-            <SyncStatusBadge status={syncStatus} />
-            {hasUnsyncedConflict && (
-              <span className="rounded bg-orange-100 px-2 py-0.5 text-xs text-orange-800">
-                Conflict
-              </span>
-            )}
-          </div>
-          {onCollapse ? (
-            <button
-              type="button"
-              className="rounded border px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCollapse();
-              }}
-              title="Collapse source panel"
-            >
-              Collapse
-            </button>
-          ) : hasActiveSession ? (
-            <span className="text-sm text-muted-foreground">
-              Click to {isExpanded ? 'collapse' : 'expand'}
+          {isLoading ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ width: 10, height: 10, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+              Starting…
             </span>
-          ) : null}
-        </div>
+          ) : hasActiveSession ? 'Restart' : 'Start Proof'}
+        </button>
+      </div>
 
-        {/* Collapsible content */}
-        {isExpanded && (
-          <div className="border-t px-4 pb-4 pt-2">
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              {/* Monaco editor */}
-              <div className="lg:col-span-2">
-                <div className="mb-1 flex items-center justify-between">
-                  <label className="block text-sm font-medium text-muted-foreground">
-                    Pie Source Code
-                  </label>
-                  <button
-                    type="button"
-                    className="rounded border px-2 py-0.5 text-xs hover:bg-muted"
-                    onClick={() => setIsMaximized(true)}
-                    title="Expand editor to fullscreen"
-                  >
-                    ⤢ Expand
-                  </button>
-                </div>
-                <div
-                  className={
-                    isMaximized
-                      ? 'fixed inset-4 z-50 flex flex-col overflow-hidden rounded-lg border bg-card shadow-2xl'
-                      : 'overflow-hidden rounded-md border'
-                  }
-                  style={isMaximized ? undefined : { height: '200px' }}
-                >
-                  {isMaximized && (
-                    <div className="flex items-center justify-between border-b bg-muted/50 px-3 py-1.5">
-                      <span className="text-sm font-medium">Pie Source Code</span>
-                      <button
-                        type="button"
-                        className="rounded border px-2 py-0.5 text-xs hover:bg-muted"
-                        onClick={() => setIsMaximized(false)}
-                        title="Close fullscreen editor"
-                      >
-                        ⤡ Close
-                      </button>
-                    </div>
-                  )}
-                  <Editor
-                    height={isMaximized ? '100%' : '200px'}
-                    language="pie"
-                    value={editorValue}
-                    onChange={handleEditorChange}
-                    beforeMount={handleBeforeMount}
-                    onMount={handleMount}
-                    options={{
-                      minimap: { enabled: false },
-                      fontSize: 13,
-                      lineNumbers: 'on',
-                      scrollBeyondLastLine: false,
-                      wordWrap: 'on',
-                      automaticLayout: true,
-                      suggestOnTriggerCharacters: true,
-                      quickSuggestions: { other: true, comments: false, strings: false },
-                      quickSuggestionsDelay: 50,
-                      acceptSuggestionOnCommitCharacter: false,
-                      acceptSuggestionOnEnter: 'off',
-                      tabCompletion: 'on',
-                      wordBasedSuggestions: 'off',
-                      suggest: {
-                        showWords: false,
-                        showSnippets: false,
-                        filterGraceful: true,
-                      },
-                      tabSize: 2,
-                      insertSpaces: true,
-                      readOnly: isSyncing,
-                    }}
-                  />
-                  {isMaximized && (
-                    <div className="border-t bg-background px-3 py-2">
-                      {liveDiagnostics.length > 0 ? (
-                        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-2">
-                          <p className="mb-1 text-xs font-semibold text-destructive">
-                            ✗ {liveDiagnostics.length} problem{liveDiagnostics.length > 1 ? 's' : ''} in source
-                          </p>
-                          <ul className="max-h-24 space-y-1 overflow-auto text-xs text-destructive">
-                            {liveDiagnostics.slice(0, 5).map((d, i) => (
-                              <li key={i} className="rounded border border-destructive/20 bg-background/60 px-2 py-1">
-                                <span className="mr-2 font-semibold uppercase tracking-wide text-[10px]">
-                                  {d.source}
-                                </span>
-                                <span className="mr-2 font-mono text-[11px]">
-                                  {d.startLine}:{d.startColumn}
-                                </span>
-                                <span className="break-words">{d.message}</span>
-                              </li>
-                            ))}
-                            {liveDiagnostics.length > 5 && (
-                              <li className="italic">…and {liveDiagnostics.length - 5} more</li>
-                            )}
-                          </ul>
-                        </div>
-                      ) : editorValue.trim() ? (
-                        <p className="rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-semibold text-green-800">
-                          ✓ No errors — source typechecks
-                        </p>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
+      {/* Monaco editor — fills remaining height */}
+      <div className="pe-editor-frame">
+        <Editor
+          height="100%"
+          language="pie"
+          value={sourceCode}
+          onChange={(v) => { if (v !== undefined) setSourceCode(v); }}
+          beforeMount={handleBeforeMount}
+          onMount={handleMount}
+          options={{
+            minimap: { enabled: false },
+            fontSize: 12.5,
+            fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+            lineNumbers: 'on',
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            automaticLayout: true,
+            tabSize: 2,
+            insertSpaces: true,
+            readOnly: isLoading,
+            padding: { top: 12 },
+            scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
+            overviewRulerLanes: 0,
+            folding: false,
+            lineDecorationsWidth: 0,
+          }}
+        />
+      </div>
+
+      {/* Diagnostics / status strip */}
+      <div className="pe-diag-strip">
+        {error ? (
+          <>
+            <div className="pe-diag-head">
+              <div className="title">
+                <span style={{ color: 'var(--pe-err)' }}>Error</span>
               </div>
-
-              {/* Claim name + action buttons */}
-              <div className="flex flex-col gap-3">
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-muted-foreground">
-                    Claim to Prove
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                    placeholder="e.g., +zero-identity"
-                    value={claimName}
-                    onChange={(e) => setClaimName(e.target.value)}
-                    disabled={isSyncing}
-                  />
-                </div>
-
-                {/* Start Proof button (initial session) */}
-                {!hasActiveSession && (
-                  <button
-                    className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={handleStartProof}
-                    disabled={isSyncing || !editorValue.trim() || !claimName.trim()}
-                  >
-                    {isSyncing ? (
-                      <span className="flex items-center justify-center gap-2">
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                        Starting…
-                      </span>
-                    ) : (
-                      'Start Proof'
-                    )}
-                  </button>
-                )}
-
-                {/* Sync to Canvas button (active session) */}
-                {hasActiveSession && (
-                  <button
-                    className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={handleSyncToCanvas}
-                    disabled={isSyncing || !editorValue.trim() || !claimName.trim()}
-                    title="Parse editor code and rebuild the canvas proof session"
-                  >
-                    {isSyncing ? (
-                      <span className="flex items-center justify-center gap-2">
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                        Syncing…
-                      </span>
-                    ) : (
-                      'Sync to Canvas'
-                    )}
-                  </button>
-                )}
-
-                {/* Restart button (active session) */}
-                {hasActiveSession && (
-                  <button
-                    className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={handleStartProof}
-                    disabled={isSyncing || !editorValue.trim() || !claimName.trim()}
-                    title="Start fresh proof session (discards canvas state)"
-                  >
-                    Restart Proof
-                  </button>
-                )}
-
-                {/* Live diagnostics banner */}
-                {liveDiagnostics.length > 0 ? (
-                  <div className="rounded-md border border-destructive/50 bg-destructive/10 p-2">
-                    <p className="mb-1 text-xs font-semibold text-destructive">
-                      ✗ {liveDiagnostics.length} problem{liveDiagnostics.length > 1 ? 's' : ''} in source
-                    </p>
-                    <ul className="space-y-1 text-xs text-destructive">
-                      {liveDiagnostics.slice(0, 5).map((d, i) => (
-                        <li key={i} className="rounded border border-destructive/20 bg-background/60 px-2 py-1">
-                          <span className="mr-2 font-semibold uppercase tracking-wide text-[10px]">
-                            {d.source}
-                          </span>
-                          <span className="mr-2 font-mono text-[11px]">
-                            {d.startLine}:{d.startColumn}
-                          </span>
-                          <span className="break-words">{d.message}</span>
-                        </li>
-                      ))}
-                      {liveDiagnostics.length > 5 && (
-                        <li className="italic">…and {liveDiagnostics.length - 5} more</li>
-                      )}
-                    </ul>
-                  </div>
-                ) : editorValue.trim() ? (
-                  <div className="rounded-md border border-green-200 bg-green-50 p-2">
-                    <p className="text-xs font-semibold text-green-800">
-                      ✓ No errors — source typechecks
-                    </p>
-                  </div>
-                ) : null}
-
-                {/* Error display */}
-                {displayedError && (
-                  <div className="rounded-md border border-destructive/50 bg-destructive/10 p-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-xs text-destructive">{displayedError}</p>
-                      <button
-                        className="text-xs text-destructive hover:underline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          clearError();
-                          setSyncError(null);
-                          if (syncStatus === 'error') {
-                            setSyncStatus(dirtySinceLastSync ? 'dirty' : 'synced');
-                          }
-                        }}
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Success indicator */}
-                {hasActiveSession && !error && syncStatus === 'synced' && (
-                  <div className="rounded-md border border-green-200 bg-green-50 p-2">
-                    <p className="text-xs text-green-800">✓ Proof session active</p>
-                    {claimType && (
-                      <p className="mt-1 truncate font-mono text-xs text-green-700">
-                        Type: {claimType}
-                      </p>
-                    )}
-                  </div>
-                )}
+              <button
+                style={{ fontSize: 10.5, color: 'var(--pe-err)', cursor: 'pointer', border: 'none', background: 'none', padding: '2px 4px' }}
+                onClick={clearError}
+              >
+                Dismiss
+              </button>
+            </div>
+            <ul className="pe-diag-list">
+              <li className="pe-diag-row err">
+                <span className="sev" />
+                <span className="loc">proof</span>
+                <span className="msg">{error}</span>
+              </li>
+            </ul>
+          </>
+        ) : hasActiveSession ? (
+          <>
+            <div className="pe-diag-head">
+              <div className="title">
+                <span style={{ color: 'var(--pe-ok)' }}>Active</span>
+                <span>·</span>
+                <span>{claimName}</span>
               </div>
             </div>
-
+            <div className="pe-diag-ok">
+              <span className="dot" />
+              {claimType
+                ? <>Session active · <span style={{ fontFamily: 'var(--pe-mono-font)', fontSize: 11 }}>{claimType.length > 50 ? claimType.slice(0, 50) + '…' : claimType}</span></>
+                : 'Proof session active · canvas is live'
+              }
+            </div>
+          </>
+        ) : (
+          <div className="pe-diag-ok" style={{ color: 'var(--pe-faint)' }}>
+            <span style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--pe-faint)', flexShrink: 0 }} />
+            No active session · enter source code and start proof
           </div>
         )}
       </div>
+
+      {/* Generated script (collapsible) */}
+      {hasActiveSession && generatedScript && (
+        <div style={{
+          borderTop: '1px solid var(--pe-line-2)',
+          background: 'var(--pe-surface-2)',
+          flexShrink: 0,
+          maxHeight: 120,
+          overflow: 'auto',
+          padding: '8px 14px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <span style={{ fontSize: 10.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--pe-faint)', fontWeight: 600 }}>
+              Generated script
+            </span>
+            <button
+              className="pe-btn"
+              style={{ fontSize: 10.5, padding: '1px 7px' }}
+              onClick={() => navigator.clipboard.writeText(generatedScript)}
+              title="Copy to clipboard"
+            >
+              Copy
+            </button>
+          </div>
+          <pre style={{ margin: 0, fontFamily: 'var(--pe-mono-font)', fontSize: 11, color: 'var(--pe-ink-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            {generatedScript}
+          </pre>
+        </div>
+      )}
     </>
   );
 }

@@ -9,7 +9,6 @@ import { useProofSession } from '@/features/proof-editor/hooks/useProofSession';
 import { useKeyboardShortcuts } from '@/features/proof-editor/hooks/useKeyboardShortcuts';
 import { useProofStore } from '@/features/proof-editor/store';
 import { useExampleStore } from '@/features/proof-editor/store/example-store';
-import { useEditorStore } from '@/features/proof-editor/store/editor-store';
 import { useMetadataStore } from '@/features/proof-editor/store/metadata-store';
 import { setApplyTacticCallback, type ApplyTacticOptions } from '@/features/proof-editor/utils/tactic-callback';
 import { EXAMPLES } from '@/features/proof-editor/data/examples';
@@ -26,6 +25,7 @@ function AppContent() {
   const { applyTactic, error, hasActiveSession } = useProofSession();
   const updateNode = useProofStore((s) => s.updateNode);
   const nodes = useProofStore((s) => s.nodes);
+  const edges = useProofStore((s) => s.edges);
   const setManualPosition = useProofStore((s) => s.setManualPosition);
   const activeClaimName = useProofStore((s) => s.claimName);
   const sessionId = useProofStore((s) => s.sessionId);
@@ -57,11 +57,6 @@ function AppContent() {
   const handleApplyTactic = useCallback(async (options: ApplyTacticOptions) => {
     const { goalId, tacticType, params, tacticNodeId } = options;
     setTacticError(null);
-
-    if (useEditorStore.getState().dirtySinceLastSync) {
-      useEditorStore.getState().triggerConflictGuard(() => handleApplyTactic(options));
-      return;
-    }
 
     if (tacticNodeId) {
       const tacticNode = nodes.find(n => n.id === tacticNodeId);
@@ -103,6 +98,7 @@ function AppContent() {
 
   const hasSession = Boolean(sessionId) || hasActiveSession;
   const openGoals = nodes.filter(n => n.type === 'goal' && (n.data as { status?: string }).status !== 'completed').length;
+  const appliedTactics = nodes.filter(n => n.type === 'tactic' && (n.data as { status?: string }).status === 'applied').length;
   const displayError = tacticError || error;
 
   return (
