@@ -2,7 +2,9 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import Editor, { type OnMount, type BeforeMount, type Monaco } from '@monaco-editor/react';
 import { useProofSession } from '../../hooks/useProofSession';
 import { useExampleStore } from '../../store/example-store';
+import { useProofStore, useGeneratedProofScript } from '../../store';
 import { diagnosticsWorker } from '@/shared/lib/worker-client';
+import type { Phase } from '@/app/App';
 
 const SEVERITY_MAP = { error: 8, warning: 4, info: 2, hint: 1 } as const;
 
@@ -213,14 +215,19 @@ function registerPieLanguage(monaco: Monaco) {
 }
 
 interface SourceCodePanelProps {
+  phase: Phase;
   onCollapse?: () => void;
 }
 
-export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
+export function SourceCodePanel({ phase, onCollapse }: SourceCodePanelProps) {
   const [sourceCode, setSourceCode] = useState(SAMPLE_SOURCE);
   const [claimName, setClaimName] = useState('reflexivity');
+  const [showEditConfirm, setShowEditConfirm] = useState(false);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
+
+  const resetProof = useProofStore((s) => s.reset);
+  const generatedScript = useGeneratedProofScript();
 
   const exampleSource = useExampleStore((s) => s.exampleSource);
   const exampleClaim = useExampleStore((s) => s.exampleClaim);
@@ -238,7 +245,6 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
     isLoading,
     error,
     clearError,
-    hasActiveSession,
     claimType,
   } = useProofSession();
 
@@ -252,6 +258,24 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
       console.error('Failed to start proof:', e);
     }
   }, [sourceCode, claimName, startSession, clearError, onCollapse]);
+
+  // Phase: Proving → Authoring (requires confirmation)
+  const handleEditSource = useCallback(() => setShowEditConfirm(true), []);
+  const confirmEditSource = useCallback(() => {
+    resetProof();
+    setShowEditConfirm(false);
+  }, [resetProof]);
+
+  // Phase: Completed → Authoring (discard proof state)
+  const handleNewProof = useCallback(() => resetProof(), [resetProof]);
+
+  // Phase: Completed → Authoring (append generated script to source)
+  const handleSaveAndEdit = useCallback(() => {
+    if (generatedScript) {
+      setSourceCode(prev => `${prev.trimEnd()}\n\n; ── Generated proof ──────────────────────────\n${generatedScript}\n`);
+    }
+    resetProof();
+  }, [generatedScript, resetProof]);
 
   const handleBeforeMount: BeforeMount = useCallback((monaco) => {
     registerPieLanguage(monaco);
@@ -304,15 +328,7 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
     return () => clearTimeout(timer);
   }, [sourceCode]);
 
-  const syncBadgeClass = isLoading
-    ? 'pe-sync-badge syncing'
-    : hasActiveSession
-      ? 'pe-sync-badge'
-      : error
-        ? 'pe-sync-badge error'
-        : 'pe-sync-badge';
-
-  const syncLabel = isLoading ? 'Syncing…' : hasActiveSession ? 'Active' : error ? 'Error' : 'Ready';
+  const isReadOnly = phase !== 'authoring' || isLoading;
 
   return (
     <>
@@ -332,38 +348,72 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
           </button>
         )}
         <h3>Source</h3>
-        <span className={syncBadgeClass}>
-          <span className="dot" />
-          {syncLabel}
-        </span>
         <div style={{ flex: 1 }} />
       </div>
 
-      {/* Claim bar */}
-      <div className="pe-source-claim">
-        <label>Claim</label>
-        <input
-          className="pe-input"
-          value={claimName}
-          onChange={(e) => setClaimName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleStartProof()}
-          placeholder="e.g., +zero-identity"
-          disabled={isLoading}
-        />
-        <button
-          className="pe-btn"
-          onClick={handleStartProof}
-          disabled={isLoading || !sourceCode.trim() || !claimName.trim()}
-          title={hasActiveSession ? 'Restart proof session' : 'Start proof session'}
-        >
-          {isLoading ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ width: 10, height: 10, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-              Starting…
-            </span>
-          ) : hasActiveSession ? 'Restart' : 'Start Proof'}
-        </button>
-      </div>
+      {/* ── AUTHORING: claim bar + start button ── */}
+      {phase === 'authoring' && (
+        <div className="pe-source-claim">
+          <label>Claim</label>
+          <input
+            className="pe-input"
+            value={claimName}
+            onChange={(e) => setClaimName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleStartProof()}
+            placeholder="e.g., +zero-identity"
+            disabled={isLoading}
+          />
+          <button
+            className="pe-btn primary"
+            onClick={handleStartProof}
+            disabled={isLoading || !sourceCode.trim() || !claimName.trim()}
+            title="Start proof session"
+          >
+            {isLoading ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 10, height: 10, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                Starting…
+              </span>
+            ) : 'Start Proof →'}
+          </button>
+        </div>
+      )}
+
+      {/* ── PROVING: amber lock banner ── */}
+      {phase === 'proving' && (
+        <div className="pe-phase-banner pe-phase-banner--proving">
+          <div className="pe-phase-banner-left">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+              <rect x="3" y="6" width="8" height="6" rx="1.5" />
+              <path d="M5 6V4.5a2 2 0 0 1 4 0V6" />
+            </svg>
+            <span>Proving <code>{claimName}</code> · editor locked</span>
+          </div>
+          <button className="pe-btn" onClick={handleEditSource} style={{ fontSize: 11 }}>
+            Edit Source
+          </button>
+        </div>
+      )}
+
+      {/* ── COMPLETED: green success banner ── */}
+      {phase === 'completed' && (
+        <div className="pe-phase-banner pe-phase-banner--completed">
+          <div className="pe-phase-banner-left">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2.5 7.5l3 3 6-6" />
+            </svg>
+            <span>Proof complete!</span>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="pe-btn" onClick={handleNewProof} style={{ fontSize: 11 }}>
+              New Proof
+            </button>
+            <button className="pe-btn primary" onClick={handleSaveAndEdit} style={{ fontSize: 11 }}>
+              Save &amp; Edit
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Monaco editor — fills remaining height */}
       <div className="pe-editor-frame">
@@ -371,7 +421,7 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
           height="100%"
           language="pie"
           value={sourceCode}
-          onChange={(v) => { if (v !== undefined) setSourceCode(v); }}
+          onChange={(v) => { if (v !== undefined && phase === 'authoring') setSourceCode(v); }}
           beforeMount={handleBeforeMount}
           onMount={handleMount}
           options={{
@@ -384,13 +434,12 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
             automaticLayout: true,
             tabSize: 2,
             insertSpaces: true,
-            readOnly: isLoading,
+            readOnly: isReadOnly,
             padding: { top: 12 },
             scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
             overviewRulerLanes: 0,
             folding: false,
             lineDecorationsWidth: 0,
-            // Fix space-swallowing: disable word-based suggestions and commit-on-char
             wordBasedSuggestions: 'off',
             acceptSuggestionOnCommitCharacter: false,
             acceptSuggestionOnEnter: 'smart',
@@ -422,30 +471,45 @@ export function SourceCodePanel({ onCollapse }: SourceCodePanelProps) {
               </li>
             </ul>
           </>
-        ) : hasActiveSession ? (
-          <>
-            <div className="pe-diag-head">
-              <div className="title">
-                <span style={{ color: 'var(--pe-ok)' }}>Active</span>
-                <span>·</span>
-                <span>{claimName}</span>
-              </div>
-            </div>
-            <div className="pe-diag-ok">
-              <span className="dot" />
-              {claimType
-                ? <>Session active · <span style={{ fontFamily: 'var(--pe-mono-font)', fontSize: 11 }}>{claimType.length > 50 ? claimType.slice(0, 50) + '…' : claimType}</span></>
-                : 'Proof session active · canvas is live'
-              }
-            </div>
-          </>
+        ) : phase === 'completed' ? (
+          <div className="pe-diag-ok" style={{ color: 'var(--pe-ok)' }}>
+            <span className="dot" />
+            All goals proved · click <strong>Save &amp; Edit</strong> to keep the generated proof
+          </div>
+        ) : phase === 'proving' ? (
+          <div className="pe-diag-ok" style={{ color: 'var(--pe-muted)' }}>
+            <span style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--pe-warn)', flexShrink: 0 }} />
+            {claimType
+              ? <><span style={{ fontFamily: 'var(--pe-mono-font)', fontSize: 11 }}>{claimType.length > 50 ? claimType.slice(0, 50) + '…' : claimType}</span></>
+              : 'Proof session active · apply tactics on the canvas'}
+          </div>
         ) : (
           <div className="pe-diag-ok" style={{ color: 'var(--pe-faint)' }}>
             <span style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--pe-faint)', flexShrink: 0 }} />
-            No active session · enter source code and start proof
+            Write your theorem and click Start Proof
           </div>
         )}
       </div>
+
+      {/* ── "Edit Source" confirmation modal ── */}
+      {showEditConfirm && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 49, background: 'rgba(17,20,24,0.4)' }}
+            onClick={() => setShowEditConfirm(false)}
+          />
+          <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+            <div className="pe-confirm-modal" style={{ pointerEvents: 'auto' }}>
+              <h4>Reset proof session?</h4>
+              <p>Editing source will clear the current proof canvas. Your source code is preserved.</p>
+              <div className="pe-confirm-actions">
+                <button className="pe-btn" onClick={() => setShowEditConfirm(false)}>Cancel</button>
+                <button className="pe-btn primary" onClick={confirmEditSource}>Reset &amp; Edit</button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

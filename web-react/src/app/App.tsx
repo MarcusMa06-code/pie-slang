@@ -7,11 +7,13 @@ import { SourceCodePanel } from '@/features/proof-editor/components/panels/Sourc
 import { AISettingsPanel } from '@/features/proof-editor/components/panels/AISettingsPanel';
 import { useProofSession } from '@/features/proof-editor/hooks/useProofSession';
 import { useKeyboardShortcuts } from '@/features/proof-editor/hooks/useKeyboardShortcuts';
-import { useProofStore } from '@/features/proof-editor/store';
+import { useProofStore, useIsProofComplete } from '@/features/proof-editor/store';
 import { useExampleStore } from '@/features/proof-editor/store/example-store';
 import { useMetadataStore } from '@/features/proof-editor/store/metadata-store';
 import { setApplyTacticCallback, type ApplyTacticOptions } from '@/features/proof-editor/utils/tactic-callback';
 import { EXAMPLES } from '@/features/proof-editor/data/examples';
+
+export type Phase = 'authoring' | 'proving' | 'completed';
 
 function readSourceCollapsed(): boolean {
   try { return localStorage.getItem('pie.sourceCollapsed') === '1'; } catch { return false; }
@@ -23,6 +25,7 @@ function writeSourceCollapsed(v: boolean) {
 
 function AppContent() {
   const { applyTactic, error, hasActiveSession } = useProofSession();
+  const isProofComplete = useIsProofComplete();
   const updateNode = useProofStore((s) => s.updateNode);
   const nodes = useProofStore((s) => s.nodes);
   const edges = useProofStore((s) => s.edges);
@@ -101,6 +104,9 @@ function AppContent() {
   const appliedTactics = nodes.filter(n => n.type === 'tactic' && (n.data as { status?: string }).status === 'applied').length;
   const displayError = tacticError || error;
 
+  // Phase state machine — derived from existing booleans, no new store state
+  const phase: Phase = !hasSession ? 'authoring' : isProofComplete ? 'completed' : 'proving';
+
   return (
     <div className="pe-app">
 
@@ -128,16 +134,16 @@ function AppContent() {
           </select>
         </div>
 
-        {hasSession && (
-          <>
-            <div className="pe-sep" />
-            <div className="pe-session-chip">
-              <span className="chip-dot" />
-              <span className="chip-muted">proving</span>
-              <span className="chip-claim">{activeClaimName || '—'}</span>
-            </div>
-          </>
-        )}
+        <div className="pe-sep" />
+        <div className={`pe-phase-chip pe-phase-chip--${phase}`}>
+          <span className="chip-dot" />
+          <span className="chip-label">
+            {phase === 'authoring' ? 'Authoring' : phase === 'proving' ? 'Proving' : 'Complete'}
+          </span>
+          {hasSession && activeClaimName && (
+            <span className="chip-claim">{activeClaimName}</span>
+          )}
+        </div>
 
         <div className="pe-tb-right">
           {displayError && (
@@ -167,12 +173,13 @@ function AppContent() {
         {/* Source rail */}
         <section className="pe-source">
           <SourceCodePanel
+            phase={phase}
             onCollapse={handleCollapseSource}
           />
         </section>
 
-        {/* Tactic palette */}
-        <section className="pe-tactics">
+        {/* Tactic palette — hidden while authoring */}
+        <section className={`pe-tactics${phase === 'authoring' ? ' pe-tactics--hidden' : ''}`}>
           <TacticPalette />
         </section>
 
@@ -207,8 +214,20 @@ function AppContent() {
           </div>
 
           {/* ReactFlow canvas — fills all remaining height */}
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
             <ProofCanvas />
+            {/* Authoring overlay — canvas is inactive until proof is started */}
+            {phase === 'authoring' && (
+              <div className="pe-canvas-dim">
+                <div className="pe-canvas-dim-card">
+                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="4" y="8" width="20" height="16" rx="2" />
+                    <path d="M9 8V6a5 5 0 0 1 10 0v2" />
+                  </svg>
+                  <p>Write your theorem in the editor, then click <strong>Start Proof</strong> to begin.</p>
+                </div>
+              </div>
+            )}
           </div>
 
         </section>
