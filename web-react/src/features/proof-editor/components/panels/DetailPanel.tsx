@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { useProofStore, useUIStore } from '../../store';
+import { useProofStore, useUIStore, useGeneratedProofScript, useIsProofComplete } from '../../store';
 import type { GoalNode, TacticNode } from '../../store/types';
 import { TACTICS } from '../../data/tactics';
+import type { TacticCategory } from '../../data/tactics';
 import { applyTactic } from '../../utils/tactic-callback';
 import { useHintStore } from '../../store/hint-store';
 import { useMetadataStore } from '../../store/metadata-store';
@@ -16,6 +17,20 @@ interface DetailPanelProps {
 
 type Tab = 'details' | 'context' | 'history';
 
+// Category dot colors match the tactic palette glyphs
+const CATEGORY_COLOR: Record<TacticCategory, string> = {
+  introduction: '#2563eb',
+  constructor:  '#16a34a',
+  elimination:  '#7c3aed',
+  application:  '#ea580c',
+  placeholder:  '#94a3b8',
+};
+
+function getCategoryColor(displayName: string): string {
+  const tactic = TACTICS.find(t => t.type === displayName);
+  return tactic ? CATEGORY_COLOR[tactic.category] : '#94a3b8';
+}
+
 function getSuggestedTactics(goalType: string): string[] {
   const suggestions: string[] = [];
   if (goalType.includes('Pi') || goalType.includes('->')) suggestions.push('intro');
@@ -25,11 +40,6 @@ function getSuggestedTactics(goalType: string): string[] {
   if (goalType.includes('= ')) suggestions.push('symm', 'cong');
   suggestions.push('exact');
   return [...new Set(suggestions)].slice(0, 5);
-}
-
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function getErrorMessage(e: unknown): string {
@@ -161,10 +171,14 @@ function AIOverview({ goalNode }: { goalNode: GoalNode }) {
 export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>('details');
   const [selectedDef, setSelectedDef] = useState<string | null>(null);
+  const [scriptCopied, setScriptCopied] = useState(false);
 
   const selectedNodeId = useUIStore((s) => s.selectedNodeId);
   const selectNode = useUIStore((s) => s.selectNode);
   const nodes = useProofStore((s) => s.nodes);
+  const claimName = useProofStore((s) => s.claimName);
+  const isProofComplete = useIsProofComplete();
+  const generatedScript = useGeneratedProofScript();
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const goalNode = selectedNode?.type === 'goal' ? (selectedNode as GoalNode) : null;
@@ -175,11 +189,29 @@ export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProp
     (n) => n.type === 'tactic' && (n.data as TacticNode['data']).status === 'applied'
   ) as TacticNode[]).sort((a, b) => (a.data.appliedAt ?? 0) - (b.data.appliedAt ?? 0));
 
-  const goalMap = new Map(
-    nodes.filter((n) => n.type === 'goal').map((n) => [n.id, n as GoalNode])
-  );
+  const goalNodes = nodes.filter((n) => n.type === 'goal') as GoalNode[];
+  const totalGoals = goalNodes.length;
+  const completedGoals = goalNodes.filter((n) => n.data.status === 'completed').length;
+
+  const goalMap = new Map(goalNodes.map((n) => [n.id, n]));
 
   const hasContent = selectedNode || definitions.length > 0 || theorems.length > 0;
+
+  // Script preview: real script when complete, approximation when in progress
+  const scriptText = useMemo(() => {
+    if (generatedScript) return generatedScript;
+    if (appliedTactics.length === 0) return null;
+    const steps = appliedTactics.map(t => `  (${t.data.displayName})`).join('\n');
+    return `(define-tactically ${claimName ?? '?'}\n${steps}\n  ...)`;
+  }, [generatedScript, appliedTactics, claimName]);
+
+  const handleCopyScript = useCallback(() => {
+    if (!scriptText) return;
+    navigator.clipboard.writeText(scriptText).then(() => {
+      setScriptCopied(true);
+      setTimeout(() => setScriptCopied(false), 1800);
+    });
+  }, [scriptText]);
 
   return (
     <>
@@ -373,58 +405,116 @@ export function DetailPanel({ definitions = [], theorems = [] }: DetailPanelProp
         {/* ── HISTORY TAB ── */}
         {activeTab === 'history' && (
           <>
+            {/* Progress bar */}
+            {totalGoals > 0 && (
+              <div className="pe-hist-progress">
+                <div className="pe-hist-progress-bar">
+                  <div
+                    className="pe-hist-progress-fill"
+                    style={{ width: `${Math.round((completedGoals / totalGoals) * 100)}%` }}
+                  />
+                </div>
+                <span className="pe-hist-progress-label">
+                  {isProofComplete
+                    ? <><span style={{ color: 'var(--pe-ok)', fontWeight: 600 }}>Complete</span> · all {totalGoals} goal{totalGoals !== 1 ? 's' : ''} proved</>
+                    : <><strong>{completedGoals}</strong> / {totalGoals} goal{totalGoals !== 1 ? 's' : ''} proved</>
+                  }
+                </span>
+              </div>
+            )}
+
+            {/* Tactic steps */}
             {appliedTactics.length === 0 ? (
               <div className="pe-d-section" style={{ color: 'var(--pe-faint)', fontSize: 12 }}>
-                No tactics applied yet · apply a tactic to see proof history
+                No tactics applied yet · apply a tactic to see proof steps
               </div>
             ) : (
-              <div className="pe-d-section">
+              <div className="pe-d-section" style={{ paddingBottom: 4 }}>
                 <div className="pe-d-section-hd">
-                  <span className="pe-d-section-label">Applied tactics</span>
+                  <span className="pe-d-section-label">Steps</span>
                   <span className="pe-d-section-count">{appliedTactics.length}</span>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <div className="pe-hist-steps">
                   {appliedTactics.map((tactic, idx) => {
                     const parentGoal = tactic.data.connectedGoalId ? goalMap.get(tactic.data.connectedGoalId) : undefined;
                     const goalType = parentGoal?.data.goalType ?? '';
-                    const truncatedGoal = goalType.length > 32 ? goalType.slice(0, 32) + '…' : goalType;
+                    const goalComplete = parentGoal?.data.status === 'completed';
+                    const color = getCategoryColor(tactic.data.displayName);
                     return (
-                      <div key={tactic.id} style={{
-                        display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 0',
-                        borderBottom: idx < appliedTactics.length - 1 ? '1px solid var(--pe-line-2)' : 'none',
-                      }}>
-                        <span style={{
-                          flexShrink: 0, width: 18, height: 18, borderRadius: '50%',
-                          background: 'var(--pe-ok)', color: '#fff', fontSize: 9.5, fontWeight: 700,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 1,
-                        }}>{idx + 1}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ fontFamily: 'var(--pe-mono-font)', fontSize: 12.5, fontWeight: 600, color: 'var(--pe-ink)' }}>
-                              {tactic.data.displayName}
-                            </span>
-                            <button onClick={() => selectNode(tactic.id)} style={{
-                              fontSize: 10, color: 'var(--pe-accent)', background: 'none', border: 'none',
-                              cursor: 'pointer', padding: 0, textDecoration: 'underline', textDecorationStyle: 'dotted',
-                            }}>select</button>
-                          </div>
-                          {truncatedGoal && (
-                            <div style={{ fontFamily: 'var(--pe-mono-font)', fontSize: 10.5, color: 'var(--pe-faint)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {truncatedGoal}
-                            </div>
-                          )}
-                          {tactic.data.appliedAt && (
-                            <div style={{ fontSize: 10, color: 'var(--pe-faint)', marginTop: 1 }}>
-                              {formatTime(tactic.data.appliedAt)}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      <button
+                        key={tactic.id}
+                        className="pe-hist-row"
+                        onClick={() => selectNode(tactic.id)}
+                        title="Click to select this node on the canvas"
+                      >
+                        {/* Step number */}
+                        <span className="pe-hist-num">{idx + 1}</span>
+                        {/* Category dot */}
+                        <span className="pe-hist-dot" style={{ background: color }} />
+                        {/* Tactic name chip */}
+                        <span className="pe-hist-name" style={{ color }}>
+                          {tactic.data.displayName}
+                        </span>
+                        {/* Goal type (right side) */}
+                        <span className="pe-hist-goal" title={goalType}>
+                          {goalType.length > 22 ? goalType.slice(0, 22) + '…' : goalType}
+                        </span>
+                        {/* Result indicator */}
+                        <span className="pe-hist-result" title={goalComplete ? 'Goal proved' : 'Subgoals open'}>
+                          {goalComplete
+                            ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--pe-ok)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5.5l2.5 2.5 5-5" /></svg>
+                            : <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--pe-warn)" strokeWidth="1.8" strokeLinecap="round"><circle cx="5" cy="5" r="3.5" /></svg>
+                          }
+                        </span>
+                      </button>
                     );
                   })}
                 </div>
               </div>
             )}
+
+            {/* Script preview */}
+            <div className="pe-d-section" style={{ paddingTop: 10 }}>
+              <div className="pe-d-section-hd">
+                <span className="pe-d-section-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  Proof script
+                  {!isProofComplete && appliedTactics.length > 0 && (
+                    <span style={{ fontSize: 9.5, color: 'var(--pe-faint)', fontWeight: 400, marginLeft: 2 }}>(partial)</span>
+                  )}
+                </span>
+                {scriptText && (
+                  <button
+                    onClick={handleCopyScript}
+                    className="pe-hist-copy-btn"
+                    title="Copy script to clipboard"
+                  >
+                    {scriptCopied ? (
+                      <>
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--pe-ok)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M1.5 5.5l2.5 2.5 5-5" />
+                        </svg>
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3.5" y="3.5" width="5" height="5" rx="1" />
+                          <path d="M6.5 3.5V2.5a1 1 0 0 0-1-1h-3a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h1" />
+                        </svg>
+                        Copy
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+              {scriptText ? (
+                <pre className={`pe-script-block${isProofComplete ? ' complete' : ''}`}>{scriptText}</pre>
+              ) : (
+                <p style={{ fontSize: 11.5, color: 'var(--pe-faint)', fontStyle: 'italic', margin: 0 }}>
+                  Apply tactics to see the proof script build up here.
+                </p>
+              )}
+            </div>
           </>
         )}
 
