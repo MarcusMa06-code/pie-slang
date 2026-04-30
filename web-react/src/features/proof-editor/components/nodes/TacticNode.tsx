@@ -92,12 +92,13 @@ export const TacticNode = memo(function TacticNode({
         selected && "ring-2 ring-primary ring-offset-2",
       )}
     >
-      {/* Input handle from goal (top) */}
+      {/* Input handle from goal (top) — hidden once applied */}
       <Handle
         type="target"
         position={Position.Top}
         id="goal-input"
         className="!h-3 !w-3 !border-2 !border-tactic !bg-white"
+        style={data.status === 'applied' ? { opacity: 0, pointerEvents: 'none' } : undefined}
       />
 
       {/* Input handle from context variable (left) - only for elim/apply tactics */}
@@ -107,7 +108,7 @@ export const TacticNode = memo(function TacticNode({
           position={Position.Left}
           id="context-input"
           className="!left-[-6px] !h-2.5 !w-2.5 !border-2 !border-blue-400 !bg-blue-100"
-          style={{ top: "50%" }}
+          style={{ top: "50%", ...(data.status === 'applied' ? { opacity: 0, pointerEvents: 'none' } : {}) }}
         />
       )}
 
@@ -197,12 +198,13 @@ export const TacticNode = memo(function TacticNode({
         </div>
       )}
 
-      {/* Output handle (to subgoals) */}
+      {/* Output handle (to subgoals) — hidden once applied */}
       <Handle
         type="source"
         position={Position.Bottom}
         id="tactic-output"
         className="!h-3 !w-3 !border-2 !border-tactic !bg-white"
+        style={data.status === 'applied' ? { opacity: 0, pointerEvents: 'none' } : undefined}
       />
     </div>
   );
