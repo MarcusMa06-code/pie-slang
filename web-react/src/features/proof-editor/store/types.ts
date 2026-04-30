@@ -70,6 +70,7 @@ export interface TacticNodeData {
   status: TacticNodeStatus;
   connectedGoalId?: string; // Which goal this tactic is connected to
   errorMessage?: string; // Error message when status is 'error'
+  appliedAt?: number; // Unix ms timestamp when status first became 'applied'
   [key: string]: unknown; // Index signature for React Flow compatibility
 }
 
@@ -219,6 +220,8 @@ export interface ProofActions {
   // Position management
   setManualPosition: (nodeId: string, position: { x: number; y: number }) => void;
   clearManualPositions: () => void;
+  // Apply auto-layout positions without recording them as manual overrides
+  setLayoutPositions: (positions: Map<string, { x: number; y: number }>) => void;
 
   // Branch collapse management
   toggleBranchCollapse: (goalId: string) => void;

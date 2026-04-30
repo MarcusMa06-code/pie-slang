@@ -1,7 +1,10 @@
-name: Deploy React App to Pie Playground
+name: Deploy Proof Editor Demo
 
 on:
-  workflow_dispatch: # manual-only; deploy-demo.yml owns pie-playground on the demo branch
+  push:
+    branches:
+      - demo
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
@@ -18,13 +21,20 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install dependencies
+      # Root yarn install provides the interpreter sources and shared types
+      # that the Vite build resolves via @pie/* aliases
+      - name: Install root dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install web-react dependencies
         working-directory: web-react
         run: npm install
 
-      - name: Build React App
+      - name: Build proof editor
         working-directory: web-react
         run: npx vite build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
@@ -33,4 +43,4 @@ jobs:
           publish_dir: ./web-react/dist
           publish_branch: gh-pages
           destination_dir: pie-playground
-          commit_message: "Deploy web-react from ai-visual"
+          commit_message: "Deploy proof editor demo from demo branch"
