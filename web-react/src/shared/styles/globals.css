@@ -276,70 +276,30 @@
 }
 
 .pe-main.source-collapsed {
-  grid-template-columns: 20px 170px minmax(0, 1fr) 260px;
-}
-
-.pe-main.source-collapsed > section.pe-source {
-  display: none;
+  /* Narrow source column: just enough for the toggle button in the panel head */
+  grid-template-columns: 40px 170px minmax(0, 1fr) 260px;
 }
 
 @media (max-width: 1240px) {
   .pe-main { grid-template-columns: 300px 160px minmax(0, 1fr) 240px; }
-  .pe-main.source-collapsed { grid-template-columns: 20px 160px minmax(0, 1fr) 240px; }
+  .pe-main.source-collapsed { grid-template-columns: 40px 160px minmax(0, 1fr) 240px; }
 }
 
 @media (max-width: 1100px) {
-  .pe-main { grid-template-columns: 20px 160px minmax(0, 1fr) 240px; }
-  .pe-main > section.pe-source { display: none; }
-  .pe-source-stub { display: flex !important; }
+  .pe-main { grid-template-columns: 40px 160px minmax(0, 1fr) 240px; }
+  .pe-main.source-collapsed { grid-template-columns: 40px 160px minmax(0, 1fr) 240px; }
 }
 
 @media (max-width: 900px) {
-  .pe-main { grid-template-columns: 36px 160px minmax(0, 1fr); }
-  .pe-main.source-collapsed { grid-template-columns: 36px 160px minmax(0, 1fr); }
+  .pe-main { grid-template-columns: 40px 160px minmax(0, 1fr); }
+  .pe-main.source-collapsed { grid-template-columns: 40px 160px minmax(0, 1fr); }
   .pe-main > section.pe-detail { display: none; }
 }
 
-/* ============ SOURCE STUB ============ */
-.pe-source-stub {
-  display: none;
-  background: var(--pe-surface);
-  border-right: 1px solid var(--pe-line);
-  padding: 0;
-  cursor: pointer;
-  color: var(--pe-muted);
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0;
-  min-width: 0;
-  border: none;
-  width: 20px;
-  /* top padding matches panel-head height so icon lands at same y as < button */
-  padding-top: 9px;
-}
+/* ============ SOURCE PANEL COLLAPSED STATE ============ */
+/* When collapsed, pe-source narrows to 40px — only the toggle button in pe-panel-head is visible.
+   The panel head itself clips to the column width so everything past the button is hidden. */
 
-.pe-source-stub:hover {
-  background: var(--pe-surface-2);
-  color: var(--pe-ink);
-}
-
-.pe-main.source-collapsed > .pe-source-stub {
-  display: flex;
-}
-
-.pe-stub-label {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  margin-top: 2px;
-}
-
-.pe-stub-sync {
-  margin-top: auto;
-}
 
 /* ============ SHARED PANEL PARTS ============ */
 .pe-panel-head {

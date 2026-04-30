@@ -216,10 +216,11 @@ function registerPieLanguage(monaco: Monaco) {
 
 interface SourceCodePanelProps {
   phase: Phase;
-  onCollapse?: () => void;
+  onToggle?: () => void;
+  collapsed?: boolean;
 }
 
-export function SourceCodePanel({ phase, onCollapse }: SourceCodePanelProps) {
+export function SourceCodePanel({ phase, onToggle, collapsed }: SourceCodePanelProps) {
   const [sourceCode, setSourceCode] = useState(SAMPLE_SOURCE);
   const [claimName, setClaimName] = useState('reflexivity');
   const [showEditConfirm, setShowEditConfirm] = useState(false);
@@ -253,11 +254,12 @@ export function SourceCodePanel({ phase, onCollapse }: SourceCodePanelProps) {
     clearError();
     try {
       await startSession(sourceCode, claimName);
-      onCollapse?.();
+      // Auto-collapse source panel when proof starts (if currently expanded)
+      if (!collapsed) onToggle?.();
     } catch (e) {
       console.error('Failed to start proof:', e);
     }
-  }, [sourceCode, claimName, startSession, clearError, onCollapse]);
+  }, [sourceCode, claimName, startSession, clearError, onToggle, collapsed]);
 
   // Phase: Proving → Authoring (requires confirmation)
   const handleEditSource = useCallback(() => setShowEditConfirm(true), []);
@@ -332,24 +334,28 @@ export function SourceCodePanel({ phase, onCollapse }: SourceCodePanelProps) {
 
   return (
     <>
-      {/* Panel head */}
+      {/* Panel head — always rendered so the toggle button stays at the same position */}
       <div className="pe-panel-head">
-        {onCollapse && (
+        {onToggle && (
           <button
             className="pe-icon-btn"
-            onClick={onCollapse}
-            title="Collapse source panel"
-            aria-label="Collapse source panel"
+            onClick={onToggle}
+            title={collapsed ? "Expand source panel" : "Collapse source panel"}
+            aria-label={collapsed ? "Expand source panel" : "Collapse source panel"}
             style={{ marginLeft: -4, marginRight: 0, flexShrink: 0 }}
           >
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-              <path d="M9 3L6 7l3 4" />
+              {/* Chevron right (expand) when collapsed, chevron left (collapse) when expanded */}
+              <path d={collapsed ? "M5 3l3 4-3 4" : "M9 3L6 7l3 4"} />
             </svg>
           </button>
         )}
-        <h3>Source</h3>
+        {!collapsed && <h3>Source</h3>}
         <div style={{ flex: 1 }} />
       </div>
+
+      {/* Panel body — hidden when collapsed to preserve Monaco state */}
+      {!collapsed && (<>
 
       {/* ── AUTHORING: claim bar + start button ── */}
       {phase === 'authoring' && (
@@ -510,6 +516,7 @@ export function SourceCodePanel({ phase, onCollapse }: SourceCodePanelProps) {
           </div>
         </>
       )}
+      </>)}
     </>
   );
 }

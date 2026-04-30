@@ -158,23 +158,12 @@ function AppContent() {
       {/* ============ MAIN 4-COLUMN GRID ============ */}
       <div className={`pe-main${sourceCollapsed ? ' source-collapsed' : ''}`}>
 
-        {/* Collapsed stub */}
-        <button
-          className="pe-source-stub"
-          onClick={handleExpandSource}
-          title="Expand source panel"
-          aria-label="Expand source panel"
-        >
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-            <path d="M5 3l3 4-3 4" />
-          </svg>
-        </button>
-
-        {/* Source rail */}
+        {/* Source rail — always present; collapses to show only the toggle button */}
         <section className="pe-source">
           <SourceCodePanel
             phase={phase}
-            onCollapse={handleCollapseSource}
+            onToggle={sourceCollapsed ? handleExpandSource : handleCollapseSource}
+            collapsed={sourceCollapsed}
           />
         </section>
 
