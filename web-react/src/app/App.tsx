@@ -12,6 +12,8 @@ import { useExampleStore } from '@/features/proof-editor/store/example-store';
 import { useMetadataStore } from '@/features/proof-editor/store/metadata-store';
 import { setApplyTacticCallback, type ApplyTacticOptions } from '@/features/proof-editor/utils/tactic-callback';
 import { EXAMPLES } from '@/features/proof-editor/data/examples';
+import { useOnboardingTour } from '@/features/onboarding/useOnboardingTour';
+import '@/features/onboarding/tour-styles.css';
 
 export type Phase = 'authoring' | 'proving' | 'completed';
 
@@ -38,6 +40,9 @@ function AppContent() {
 
   // Use keyboard shortcuts hook
   useKeyboardShortcuts();
+
+  // Onboarding tour — auto-starts on first visit; Help button replays it.
+  const tour = useOnboardingTour();
 
   // Use example store
   const selectedExample = useExampleStore((s) => s.selectedExample);
@@ -126,6 +131,7 @@ function AppContent() {
             className="pe-select"
             value={selectedExample}
             onChange={(e) => selectExample(e.target.value)}
+            data-tour="example-select"
           >
             <option value="">-- Select --</option>
             {EXAMPLES.map((ex) => (
@@ -135,7 +141,7 @@ function AppContent() {
         </div>
 
         <div className="pe-sep" />
-        <div className={`pe-phase-chip pe-phase-chip--${phase}`}>
+        <div className={`pe-phase-chip pe-phase-chip--${phase}`} data-tour="phase-chip">
           <span className="chip-dot" />
           <span className="chip-label">
             {phase === 'authoring' ? 'Authoring' : phase === 'proving' ? 'Proving' : 'Complete'}
@@ -152,6 +158,20 @@ function AppContent() {
               {displayError.length > 60 ? displayError.slice(0, 60) + '…' : displayError}
             </span>
           )}
+          <button
+            className="pe-icon-btn"
+            title="Replay guided tour"
+            aria-label="Replay guided tour"
+            onClick={tour.start}
+            data-tour="help-btn"
+            style={{ marginLeft: 6 }}
+          >
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="6.5" cy="6.5" r="5.2" />
+              <path d="M4.8 5a1.7 1.7 0 1 1 2.5 1.5c-.5.3-.8.7-.8 1.2" />
+              <circle cx="6.5" cy="9.6" r="0.4" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -159,7 +179,7 @@ function AppContent() {
       <div className={`pe-main${sourceCollapsed ? ' source-collapsed' : ''}`}>
 
         {/* Source rail — always present; collapses to show only the toggle button */}
-        <section className="pe-source">
+        <section className="pe-source" data-tour="source-editor">
           <SourceCodePanel
             phase={phase}
             onToggle={sourceCollapsed ? handleExpandSource : handleCollapseSource}
@@ -168,12 +188,12 @@ function AppContent() {
         </section>
 
         {/* Tactic palette — hidden while authoring */}
-        <section className={`pe-tactics${phase === 'authoring' ? ' pe-tactics--hidden' : ''}`}>
+        <section className={`pe-tactics${phase === 'authoring' ? ' pe-tactics--hidden' : ''}`} data-tour="tactic-palette">
           <TacticPalette />
         </section>
 
         {/* Canvas */}
-        <section className="pe-canvas-wrap">
+        <section className="pe-canvas-wrap" data-tour="canvas">
           <div className="pe-canvas-head">
             <div className="pe-breadcrumb">
               <span>proof</span>
@@ -222,7 +242,7 @@ function AppContent() {
         </section>
 
         {/* Detail rail */}
-        <section className="pe-detail">
+        <section className="pe-detail" data-tour="detail-panel">
           <DetailPanel
             definitions={globalContext.definitions}
             theorems={globalContext.theorems}

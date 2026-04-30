@@ -390,6 +390,7 @@ export function SourceCodePanel({ phase, onToggle, collapsed }: SourceCodePanelP
             onClick={handleStartProof}
             disabled={isLoading || !sourceCode.trim() || !claimName.trim()}
             title="Start proof session"
+            data-tour="start-proof"
           >
             {isLoading ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
