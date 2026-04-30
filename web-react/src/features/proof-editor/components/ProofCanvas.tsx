@@ -565,7 +565,7 @@ export function ProofCanvas() {
         <Controls />
         {/* Control buttons - Reset Layout and Expand All */}
         {(hasManualPositions || hasCollapsedBranches) && (
-          <div className="absolute bottom-4 left-4 z-10 flex gap-2">
+          <div className="absolute bottom-32 left-4 z-10 flex gap-2">
             {hasManualPositions && (
               <button
                 onClick={clearManualPositions}
