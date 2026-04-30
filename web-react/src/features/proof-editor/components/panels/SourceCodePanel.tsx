@@ -354,6 +354,22 @@ export function SourceCodePanel({ phase, onToggle, collapsed }: SourceCodePanelP
         <div style={{ flex: 1 }} />
       </div>
 
+      {/* Vertical label — shown when collapsed */}
+      {collapsed && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 10 }}>
+          <span style={{
+            writingMode: 'vertical-rl',
+            transform: 'rotate(180deg)',
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--pe-faint)',
+            userSelect: 'none',
+          }}>Source</span>
+        </div>
+      )}
+
       {/* Panel body — hidden when collapsed to preserve Monaco state */}
       {!collapsed && (<>
 

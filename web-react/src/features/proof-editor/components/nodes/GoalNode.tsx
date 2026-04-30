@@ -66,7 +66,12 @@ export const GoalNode = memo(function GoalNode({
   const hintState = useGoalHintState(id);
   const hasApiKey = useHintStore((s) => !!s.apiKey);
 
-  const { getNode } = useReactFlow(); // Helper to access node properties like position
+  const { getNode, getEdges } = useReactFlow(); // Helper to access node properties like position
+
+  // Hide handles when already connected (avoids visual overlap on completed edges)
+  const edges = getEdges();
+  const hasParentEdge = edges.some(e => e.target === id && e.data?.kind === 'tactic-to-goal');
+  const hasChildTactic = edges.some(e => e.source === id && e.data?.kind === 'goal-to-tactic');
 
   // Store access for direct manipulation (rendering updates locally without session)
   const addTacticNode = useProofStore((s) => s.addTacticNode);
@@ -299,12 +304,13 @@ export const GoalNode = memo(function GoalNode({
         </div>
       )}
 
-      {/* Input handle (from parent tactic) */}
+      {/* Input handle (from parent tactic) — hidden once connected */}
       <Handle
         type="target"
         position={Position.Top}
         id="goal-input"
         className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
+        style={hasParentEdge ? { opacity: 0, pointerEvents: 'none' } : undefined}
       />
 
       {/* Goal header and type - clickable for details */}
@@ -409,12 +415,13 @@ export const GoalNode = memo(function GoalNode({
         ) : null;
       })()}
 
-      {/* Output handle (to tactic) */}
+      {/* Output handle (to tactic) — hidden once a tactic is connected */}
       <Handle
         type="source"
         position={Position.Bottom}
         id="goal-output"
         className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
+        style={hasChildTactic ? { opacity: 0, pointerEvents: 'none' } : undefined}
       />
     </div>
   );
