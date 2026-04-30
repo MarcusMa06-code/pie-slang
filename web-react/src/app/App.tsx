@@ -30,7 +30,6 @@ function AppContent() {
   const isProofComplete = useIsProofComplete();
   const updateNode = useProofStore((s) => s.updateNode);
   const nodes = useProofStore((s) => s.nodes);
-  const edges = useProofStore((s) => s.edges);
   const setManualPosition = useProofStore((s) => s.setManualPosition);
   const activeClaimName = useProofStore((s) => s.claimName);
   const sessionId = useProofStore((s) => s.sessionId);
@@ -106,7 +105,6 @@ function AppContent() {
 
   const hasSession = Boolean(sessionId) || hasActiveSession;
   const openGoals = nodes.filter(n => n.type === 'goal' && (n.data as { status?: string }).status !== 'completed').length;
-  const appliedTactics = nodes.filter(n => n.type === 'tactic' && (n.data as { status?: string }).status === 'applied').length;
   const displayError = tacticError || error;
 
   // Phase state machine — derived from existing booleans, no new store state

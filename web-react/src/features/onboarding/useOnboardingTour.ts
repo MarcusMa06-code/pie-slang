@@ -3,7 +3,6 @@ import { driver, type Driver, type DriveStep } from 'driver.js';
 import 'driver.js/dist/driver.css';
 
 const STORAGE_KEY = 'pie.tourCompleted';
-const SOURCE_COLLAPSED_KEY = 'pie.sourceCollapsed';
 
 function hasCompletedTour(): boolean {
   try { return localStorage.getItem(STORAGE_KEY) === '1'; } catch { return false; }
@@ -105,19 +104,8 @@ export interface OnboardingTour {
 export function useOnboardingTour(opts: { autoStart?: boolean } = {}): OnboardingTour {
   const { autoStart = true } = opts;
   const driverRef = useRef<Driver | null>(null);
-  const restoreCollapsedRef = useRef<boolean>(false);
 
   const start = useCallback(() => {
-    // If source panel is collapsed, expand it temporarily so steps 3/4 anchors are visible.
-    let wasCollapsed = false;
-    try { wasCollapsed = localStorage.getItem(SOURCE_COLLAPSED_KEY) === '1'; } catch {}
-    if (wasCollapsed) {
-      try { localStorage.setItem(SOURCE_COLLAPSED_KEY, '0'); } catch {}
-      restoreCollapsedRef.current = true;
-      // Notify the app to re-read the flag — simplest is a full reload, but we can dispatch a storage event for same-tab.
-      // App reads localStorage only on mount, so we just leave it expanded; user can re-collapse manually.
-    }
-
     if (driverRef.current) {
       driverRef.current.destroy();
     }

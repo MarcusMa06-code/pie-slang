@@ -1,10 +1,7 @@
 name: Deploy React App to Pie Playground
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_dispatch: # manual-only; deploy-demo.yml owns pie-playground on the demo branch
 
 jobs:
   build-and-deploy:
