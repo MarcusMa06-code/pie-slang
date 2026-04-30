@@ -70,6 +70,7 @@ export interface TacticNodeData {
   status: TacticNodeStatus;
   connectedGoalId?: string; // Which goal this tactic is connected to
   errorMessage?: string; // Error message when status is 'error'
+  appliedAt?: number; // Unix ms timestamp when status first became 'applied'
   [key: string]: unknown; // Index signature for React Flow compatibility
 }
 

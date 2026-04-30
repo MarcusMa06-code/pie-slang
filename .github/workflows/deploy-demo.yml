@@ -1,0 +1,46 @@
+name: Deploy Proof Editor Demo
+
+on:
+  push:
+    branches:
+      - demo
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Root yarn install provides the interpreter sources and shared types
+      # that the Vite build resolves via @pie/* aliases
+      - name: Install root dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install web-react dependencies
+        working-directory: web-react
+        run: npm install
+
+      - name: Build proof editor
+        working-directory: web-react
+        run: npx vite build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web-react/dist
+          publish_branch: gh-pages
+          destination_dir: pie-playground
+          commit_message: "Deploy proof editor demo from demo branch"

@@ -276,70 +276,30 @@
 }
 
 .pe-main.source-collapsed {
-  grid-template-columns: 20px 170px minmax(0, 1fr) 260px;
-}
-
-.pe-main.source-collapsed > section.pe-source {
-  display: none;
+  /* Narrow source column: just enough for the toggle button in the panel head */
+  grid-template-columns: 40px 170px minmax(0, 1fr) 260px;
 }
 
 @media (max-width: 1240px) {
   .pe-main { grid-template-columns: 300px 160px minmax(0, 1fr) 240px; }
-  .pe-main.source-collapsed { grid-template-columns: 20px 160px minmax(0, 1fr) 240px; }
+  .pe-main.source-collapsed { grid-template-columns: 40px 160px minmax(0, 1fr) 240px; }
 }
 
 @media (max-width: 1100px) {
-  .pe-main { grid-template-columns: 20px 160px minmax(0, 1fr) 240px; }
-  .pe-main > section.pe-source { display: none; }
-  .pe-source-stub { display: flex !important; }
+  .pe-main { grid-template-columns: 40px 160px minmax(0, 1fr) 240px; }
+  .pe-main.source-collapsed { grid-template-columns: 40px 160px minmax(0, 1fr) 240px; }
 }
 
 @media (max-width: 900px) {
-  .pe-main { grid-template-columns: 36px 160px minmax(0, 1fr); }
-  .pe-main.source-collapsed { grid-template-columns: 36px 160px minmax(0, 1fr); }
+  .pe-main { grid-template-columns: 40px 160px minmax(0, 1fr); }
+  .pe-main.source-collapsed { grid-template-columns: 40px 160px minmax(0, 1fr); }
   .pe-main > section.pe-detail { display: none; }
 }
 
-/* ============ SOURCE STUB ============ */
-.pe-source-stub {
-  display: none;
-  background: var(--pe-surface);
-  border-right: 1px solid var(--pe-line);
-  padding: 0;
-  cursor: pointer;
-  color: var(--pe-muted);
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0;
-  min-width: 0;
-  border: none;
-  width: 20px;
-  /* top padding matches panel-head height so icon lands at same y as < button */
-  padding-top: 9px;
-}
+/* ============ SOURCE PANEL COLLAPSED STATE ============ */
+/* When collapsed, pe-source narrows to 40px — only the toggle button in pe-panel-head is visible.
+   The panel head itself clips to the column width so everything past the button is hidden. */
 
-.pe-source-stub:hover {
-  background: var(--pe-surface-2);
-  color: var(--pe-ink);
-}
-
-.pe-main.source-collapsed > .pe-source-stub {
-  display: flex;
-}
-
-.pe-stub-label {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  margin-top: 2px;
-}
-
-.pe-stub-sync {
-  margin-top: auto;
-}
 
 /* ============ SHARED PANEL PARTS ============ */
 .pe-panel-head {
@@ -1041,4 +1001,311 @@
 
 .pe-modal-body {
   padding: 12px 16px;
+}
+
+/* ============ PHASE CHIP (topbar) ============ */
+.pe-phase-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 9px;
+  border: 1px solid var(--pe-line);
+  border-radius: 99px;
+  font-size: 11.5px;
+  background: var(--pe-surface);
+  flex-shrink: 0;
+}
+
+.pe-phase-chip .chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--pe-faint);
+}
+
+.pe-phase-chip .chip-label {
+  color: var(--pe-muted);
+  font-weight: 500;
+}
+
+.pe-phase-chip .chip-claim {
+  font-family: var(--pe-mono-font);
+  font-weight: 500;
+  color: var(--pe-ink);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Authoring — gray/neutral */
+.pe-phase-chip--authoring .chip-dot { background: var(--pe-faint); }
+.pe-phase-chip--authoring .chip-label { color: var(--pe-muted); }
+
+/* Proving — amber */
+.pe-phase-chip--proving {
+  background: var(--pe-warn-soft);
+  border-color: #eed8a7;
+}
+.pe-phase-chip--proving .chip-dot { background: var(--pe-warn); }
+.pe-phase-chip--proving .chip-label { color: var(--pe-warn); }
+
+/* Completed — green */
+.pe-phase-chip--completed {
+  background: var(--pe-ok-soft);
+  border-color: #c8e6d4;
+}
+.pe-phase-chip--completed .chip-dot { background: var(--pe-ok); }
+.pe-phase-chip--completed .chip-label { color: var(--pe-ok); }
+
+/* ============ PHASE BANNER (source panel) ============ */
+.pe-phase-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 14px;
+  border-bottom: 1px solid transparent;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.pe-phase-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pe-phase-banner-left code {
+  font-family: var(--pe-mono-font);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pe-phase-banner--proving {
+  background: var(--pe-warn-soft);
+  border-color: #eed8a7;
+  color: var(--pe-warn);
+}
+
+.pe-phase-banner--completed {
+  background: var(--pe-ok-soft);
+  border-color: #c8e6d4;
+  color: var(--pe-ok);
+}
+
+/* ============ TACTIC RAIL hidden state ============ */
+.pe-tactics--hidden {
+  pointer-events: none;
+  opacity: 0.3;
+  filter: grayscale(0.5);
+  user-select: none;
+}
+
+/* ============ CANVAS DIM OVERLAY ============ */
+.pe-canvas-dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(247, 247, 245, 0.82);
+  backdrop-filter: blur(2px);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pe-canvas-dim-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 32px;
+  background: var(--pe-surface);
+  border: 1px solid var(--pe-line);
+  border-radius: var(--pe-radius-lg);
+  box-shadow: var(--pe-shadow-md);
+  color: var(--pe-muted);
+  text-align: center;
+  max-width: 280px;
+}
+
+.pe-canvas-dim-card p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--pe-muted);
+}
+
+.pe-canvas-dim-card strong {
+  color: var(--pe-ink);
+}
+
+/* ============ CONFIRM MODAL ============ */
+.pe-confirm-modal {
+  background: var(--pe-surface);
+  border: 1px solid var(--pe-line);
+  border-radius: var(--pe-radius-lg);
+  box-shadow: 0 16px 48px rgba(17, 20, 24, 0.18);
+  padding: 20px 24px;
+  width: 320px;
+}
+
+.pe-confirm-modal h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pe-ink);
+}
+
+.pe-confirm-modal p {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  color: var(--pe-muted);
+  line-height: 1.5;
+}
+
+.pe-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ============ HISTORY TAB — PROGRESS BAR ============ */
+.pe-hist-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--pe-line-2);
+  flex-shrink: 0;
+}
+
+.pe-hist-progress-bar {
+  height: 4px;
+  border-radius: 99px;
+  background: var(--pe-line);
+  overflow: hidden;
+}
+
+.pe-hist-progress-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--pe-ok);
+  transition: width 0.3s ease;
+}
+
+.pe-hist-progress-label {
+  font-size: 11.5px;
+  color: var(--pe-muted);
+}
+
+/* ============ HISTORY TAB — STEP ROWS ============ */
+.pe-hist-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.pe-hist-row {
+  display: grid;
+  grid-template-columns: 18px 8px 1fr auto 14px;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font-family: var(--pe-ui-font);
+}
+
+.pe-hist-row:hover {
+  background: var(--pe-surface-2);
+}
+
+.pe-hist-num {
+  font-size: 10px;
+  color: var(--pe-faint);
+  font-family: var(--pe-mono-font);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.pe-hist-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pe-hist-name {
+  font-family: var(--pe-mono-font);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pe-hist-goal {
+  font-family: var(--pe-mono-font);
+  font-size: 10px;
+  color: var(--pe-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  max-width: 90px;
+}
+
+.pe-hist-result {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ============ HISTORY TAB — SCRIPT BLOCK ============ */
+.pe-hist-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--pe-surface-sunk);
+  color: var(--pe-muted);
+  border: 1px solid var(--pe-line-2);
+  cursor: pointer;
+  font-family: var(--pe-ui-font);
+}
+
+.pe-hist-copy-btn:hover {
+  background: var(--pe-surface-2);
+  color: var(--pe-ink);
+}
+
+.pe-script-block {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--pe-surface-sunk);
+  border: 1px solid var(--pe-line-2);
+  border-radius: 6px;
+  font-family: var(--pe-mono-font);
+  font-size: 11px;
+  color: var(--pe-ink-2);
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+  word-break: normal;
+}
+
+.pe-script-block.complete {
+  border-color: color-mix(in oklab, var(--pe-ok) 25%, var(--pe-line));
+  background: color-mix(in oklab, var(--pe-ok) 4%, var(--pe-surface));
 }
